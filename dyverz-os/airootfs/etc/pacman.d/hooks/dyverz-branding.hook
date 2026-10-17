@@ -1,0 +1,8 @@
+[Trigger]
+Operation = Upgrade
+Type = Package
+Target = filesystem
+[Action]
+Description = Restoring Dyverz OS branding
+When = PostTransaction
+Exec = /usr/local/bin/dyverz-branding

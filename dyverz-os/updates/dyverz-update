@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Dyverz Update Manager — pacman + AUR + Flatpak + Snap in one place, installed only with the user's approval.
+#   dyverz-update check [--json]     list available updates (no root, no changes)
+#   dyverz-update download           pre-download pacman updates only (root)      — mode "download"
+#   dyverz-update install            install everything (root; AUR/flatpak as the user)
+#   dyverz-update mode [ask|download|manual]   show or set the policy (root to set)
+#   dyverz-update prompt             timer entry point in the user session: check, then ask via the GTK dialog
+#   dyverz-update status
+set -uo pipefail
+CONF=/etc/dyverz/updates.conf; LOG=/var/log/dyverz-update.log; STATE=/var/lib/dyverz/updates
+mode() { [[ -f $CONF ]] && awk -F= '/^mode=/{print $2}' "$CONF" || echo ask; }
+USER_=${SUDO_USER:-${PKEXEC_UID:+$(getent passwd "$PKEXEC_UID" | cut -d: -f1)}}; USER_=${USER_:-$(getent passwd 1000 | cut -d: -f1)}
+as_user() { if [[ $EUID -eq 0 ]]; then sudo -u "$USER_" -H "$@"; else "$@"; fi; }
+
+check() {
+  if command -v checkupdates >/dev/null; then PAC=$(checkupdates 2>/dev/null || true)   # pacman-contrib: safe, no root, no db sync of the real db
+  else PAC=$(pacman -Qu 2>/dev/null | grep -v '\[ignored\]' || true); [[ ${1:-} = --json ]] || echo "note: pacman-contrib not installed — showing updates from the last synced database only"; fi
+  AUR=$(command -v yay >/dev/null && as_user yay -Qua 2>/dev/null || true)
+  FLAT=$(command -v flatpak >/dev/null && flatpak remote-ls --updates --columns=application,version 2>/dev/null || true)
+  SNAP=$(command -v snap >/dev/null && snap refresh --list 2>/dev/null | tail -n +2 || true)
+  n=$(( $(grep -c . <<<"$PAC") + $(grep -c . <<<"$AUR") + $(grep -c . <<<"$FLAT") + $(grep -c . <<<"$SNAP") ))
+  if [[ ${1:-} = --json ]]; then
+    python3 -c 'import json,sys; a=sys.argv; print(json.dumps({"count":int(a[1]),"mode":a[2],"pacman":a[3].splitlines(),"aur":a[4].splitlines(),"flatpak":a[5].splitlines(),"snap":a[6].splitlines()}))' "$n" "$(mode)" "$PAC" "$AUR" "$FLAT" "$SNAP"
+  else
+    echo "Updates available: $n   (policy: $(mode))"
+    [[ -n $PAC ]]  && { echo; echo "[pacman]";  echo "$PAC"; }
+    [[ -n $AUR ]]  && { echo; echo "[AUR]";     echo "$AUR"; }
+    [[ -n $FLAT ]] && { echo; echo "[flatpak]"; echo "$FLAT"; }
+    [[ -n $SNAP ]] && { echo; echo "[snap]";    echo "$SNAP"; }
+  fi
+  mkdir -p "${XDG_RUNTIME_DIR:-/tmp}/dyverz" 2>/dev/null; echo "$n" > "${XDG_RUNTIME_DIR:-/tmp}/dyverz/updates-count" 2>/dev/null
+  return 0
+}
+
+case ${1:-check} in
+  check)    check "${2:-}";;
+  download) [[ $EUID -eq 0 ]] || { echo "root needed"; exit 1; }; mkdir -p "$STATE"; echo "== $(date -Is) download" >> "$LOG"
+            pacman -Syuw --noconfirm 2>&1 | tail -3 | tee -a "$LOG"; date -Is > "$STATE/last-download";;
+  install)  [[ $EUID -eq 0 ]] || { echo "root needed"; exit 1; }; mkdir -p "$STATE"; echo "== $(date -Is) install by $USER_" >> "$LOG"
+            echo ":: pacman";  pacman -Syu --noconfirm 2>&1 | tee -a "$LOG" | grep -vE '^( |$)' | tail -15
+            command -v yay >/dev/null && { echo ":: AUR"; as_user yay -Sua --noconfirm --answerdiff None --answerclean None 2>&1 | tail -5 | tee -a "$LOG"; }
+            command -v flatpak >/dev/null && { echo ":: flatpak"; flatpak update -y --noninteractive 2>&1 | tail -3 | tee -a "$LOG"; }
+            command -v snap >/dev/null && systemctl is-active -q snapd.socket && { echo ":: snap"; snap refresh 2>&1 | tail -3 | tee -a "$LOG"; }
+            date -Is > "$STATE/last-install"; echo ":: done — $(date)"
+            [[ $(pacman -Q linux 2>/dev/null | cut -d' ' -f2 | sed 's/\.arch/-arch/') != $(uname -r) ]] && echo ":: a new kernel was installed — reboot when convenient";;
+  mode)     if [[ -n ${2:-} ]]; then [[ $EUID -eq 0 ]] || { echo "root needed"; exit 1; }; [[ $2 =~ ^(ask|download|manual)$ ]] || { echo "mode: ask|download|manual"; exit 1; }
+              mkdir -p /etc/dyverz; echo "mode=$2" > "$CONF"
+              if [[ $2 = download ]]; then systemctl enable --now dyverz-update-download.timer >/dev/null 2>&1; else systemctl disable --now dyverz-update-download.timer >/dev/null 2>&1; fi
+              echo "update policy: $2"; else echo "$(mode)"; fi;;
+  prompt)   M=$(mode); [[ $M = manual ]] && exit 0
+            N=$(check --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])'); [[ $N -gt 0 ]] || exit 0
+            exec /usr/local/bin/dyverz-update-gui;;
+  status)   echo "policy: $(mode)"; echo "last download: $(cat $STATE/last-download 2>/dev/null || echo never)"; echo "last install:  $(cat $STATE/last-install 2>/dev/null || echo never)"; tail -3 "$LOG" 2>/dev/null;;
+  *) sed -n '2,9p' "$0";;
+esac

@@ -1,0 +1,23 @@
+# ---- Dyverz OS common stack (official repos) ----
+base base-devel linux linux-firmware linux-headers intel-ucode amd-ucode
+sudo git rsync wget curl nano vim man-db less which
+networkmanager network-manager-applet bluez bluez-utils
+pipewire pipewire-alsa pipewire-pulse wireplumber
+gdm xdg-user-dirs xdg-user-dirs-gtk xdg-utils
+xdg-desktop-portal xdg-desktop-portal-gtk xdg-desktop-portal-gnome xdg-desktop-portal-kde
+mesa lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader vulkan-intel vulkan-radeon
+virtualbox-guest-utils open-vm-tools spice-vdagent
+ttf-dejavu noto-fonts noto-fonts-emoji noto-fonts-cjk ttf-liberation
+# --- the app stack ---
+firefox thunderbird vlc gnome-text-editor gnome-control-center resources discover packagekit-qt6 flatpak-kcm
+docker docker-compose
+wine wine-mono wine-gecko winetricks vkd3d lib32-vkd3d gamemode lib32-gamemode lib32-gnutls lib32-libpulse
+flatpak dpkg apt
+# --- first-boot wizard + installer + tools ---
+grub plymouth gptfdisk parted
+cage python-gobject gtk4 libadwaita dialog squashfs-tools arch-install-scripts efibootmgr dosfstools e2fsprogs
+imagemagick jq
+gnome-tweaks kvantum qt6ct papirus-icon-theme adwaita-icon-theme
+# --- live ISO needs ---
+mkinitcpio-archiso archiso
+vte4 distrobox podman ttf-cascadia-code ipython

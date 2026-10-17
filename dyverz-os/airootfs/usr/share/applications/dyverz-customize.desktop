@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz Customize
+Comment=Wallpaper, icons, taskbar, start menu, keyboard, boot and login screen
+Exec=dyverz-customize
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;

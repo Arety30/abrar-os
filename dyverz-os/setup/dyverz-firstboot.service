@@ -1,0 +1,19 @@
+# First boot: run the Dyverz setup wizard on tty1 (text mode) if no display manager is
+# active yet.  The graphical wizard is started by the temporary OOBE session instead
+# (see install/install-stack.sh: user dyverz-oobe autologin + autostart entry).
+[Unit]
+Description=Dyverz OS initial setup
+ConditionPathExists=!/etc/dyverz/setup-done
+After=network-online.target
+Conflicts=getty@tty1.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dyverz-setup-tui
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz EXE Installer
+Comment=Install Windows programs (.exe/.msi) onto the WinKernel partition
+Exec=dyverz-exe-install %f
+Icon=dyverz
+Terminal=false
+MimeType=application/x-ms-dos-executable;application/vnd.microsoft.portable-executable;application/x-msi;application/x-msdownload;
+Categories=System;Utility;

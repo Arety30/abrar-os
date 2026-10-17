@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# set the login session (plasma|gnome|cinnamon) for the calling user in AccountsService + GDM
+set -e; u=${SUDO_USER:-$USER}; s=$1; [ "$(id -u)" = 0 ] || exec sudo -n "$0" "$@"
+case $s in plasma|gnome|cinnamon|gnome-xorg|plasmax11) ;; *) echo "bad session $s"; exit 1;; esac
+f=/var/lib/AccountsService/users/$u; mkdir -p "$(dirname $f)"; touch "$f"
+grep -q '^\[User\]' "$f" || echo '[User]' >> "$f"; grep -q '^Session=' "$f" && sed -i "s/^Session=.*/Session=$s/" "$f" || sed -i "/^\[User\]/a Session=$s" "$f"
+grep -q '^XSession=' "$f" && sed -i "s/^XSession=.*/XSession=$s/" "$f" || sed -i "/^\[User\]/a XSession=$s" "$f"
+echo "session for $u -> $s"

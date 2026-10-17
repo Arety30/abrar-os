@@ -1,0 +1,15 @@
+{
+  "defaultProfile": "arch",
+  "font": "Cascadia Mono 11",
+  "theme": {"background": "#0c0c0c", "foreground": "#cccccc", "cursor": "#ffffff", "opacity": 0.93,
+    "palette": ["#0c0c0c","#c50f1f","#13a10e","#c19c00","#0037da","#881798","#3a96dd","#cccccc",
+                "#767676","#e74856","#16c60c","#f9f1a5","#3b78ff","#b4009e","#61d6d6","#f2f2f2"]},
+  "profiles": [
+    {"id": "arch",    "name": "Arch Linux",          "icon": "",  "command": "dyverz-shell arch",    "tab": "#1793d1"},
+    {"id": "ubuntu",  "name": "Ubuntu",              "icon": "",  "command": "dyverz-shell ubuntu",  "tab": "#e95420"},
+    {"id": "kali",    "name": "Kali Linux",          "icon": "",  "command": "dyverz-shell kali",    "tab": "#557c94"},
+    {"id": "python",  "name": "Python",              "icon": "",  "command": "dyverz-shell python",  "tab": "#ffd43b"},
+    {"id": "winecmd", "name": "Command Prompt (Wine)","icon": "",  "command": "dyverz-shell winecmd", "tab": "#9b9b9b"},
+    {"id": "pwsh",    "name": "PowerShell 7 Preview", "icon": "",  "command": "dyverz-shell pwsh",    "tab": "#5391fe"}
+  ]
+}

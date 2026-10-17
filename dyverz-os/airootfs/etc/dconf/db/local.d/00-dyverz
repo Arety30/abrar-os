@@ -1,0 +1,14 @@
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/dyverz-emote/']
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/dyverz-emote]
+name='emote'
+command='emote'
+binding='F1'
+[org/cinnamon/desktop/keybindings]
+custom-list=['dyverz-emote']
+[org/cinnamon/desktop/keybindings/custom-keybindings/dyverz-emote]
+name='emote'
+command='emote'
+binding=['F1']
+[org/gnome/shell]
+welcome-dialog-last-shown-version='999'

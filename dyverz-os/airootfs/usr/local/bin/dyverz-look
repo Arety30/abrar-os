@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# Dyverz look & customisation engine.
+#   dyverz-look apply <windows|mac|ubuntu|fedora|mint|gnome|kde> [--files nautilus|dolphin|nemo] [--settings gnome|kde|cinnamon] [--editor gnome|kate|xed]
+#   dyverz-look set <key> <value>       keys: wallpaper icons theme cursor font
+#                                            taskbar.position taskbar.size taskbar.autohide startmenu
+#                                            keyboard.layout shortcut (value KEY=command) files settings editor
+#                                            boot.logo boot.title boot.background login.logo
+#   dyverz-look get [key] | list | apply-pending | session <look>
+set -uo pipefail
+. /usr/share/dyverz/looks/common.sh
+DE=$(current_de); W=/usr/share/dyverz/wallpapers
+gs() { gsettings set "$@" 2>/dev/null; }
+kw() { kwriteconfig6 "$@" 2>/dev/null; }
+plasma_js() { qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$1" >/dev/null 2>&1 || qdbus org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "$1" >/dev/null 2>&1; }
+gnome_ext() { for e in "$@"; do gnome-extensions enable "$e" 2>/dev/null; done; }
+
+set_wallpaper() { f=$1; [ -f "$f" ] || f=$W/$1.png; [ -f "$f" ] || { echo "no wallpaper $1"; return 1; }
+  case $DE in
+    gnome) gs org.gnome.desktop.background picture-uri "file://$f"; gs org.gnome.desktop.background picture-uri-dark "file://$f"; gs org.gnome.desktop.background picture-options zoom; gs org.gnome.desktop.screensaver picture-uri "file://$f";;
+    kde) plasma-apply-wallpaperimage "$f" >/dev/null 2>&1; kw --file kscreenlockerrc --group Greeter --group Wallpaper --group org.kde.image --group General --key Image "file://$f";;
+    cinnamon) gs org.cinnamon.desktop.background picture-uri "file://$f"; gs org.cinnamon.desktop.background picture-options zoom;;
+  esac; }
+set_icons() { case $DE in gnome) gs org.gnome.desktop.interface icon-theme "$1";; kde) kw --file kdeglobals --group Icons --key Theme "$1"; [ -x /usr/lib/plasma-changeicons ] && /usr/lib/plasma-changeicons "$1" >/dev/null 2>&1;; cinnamon) gs org.cinnamon.desktop.interface icon-theme "$1";; esac; }
+set_theme() { # gtk/shell theme (gnome, cinnamon) or global look-and-feel (kde)
+  case $DE in
+    gnome) gs org.gnome.desktop.interface gtk-theme "$1"; gnome_ext user@example.com; gs org.gnome.shell.extensions.user-theme name "$1"; [[ $1 == *-[Dd]ark* ]] && gs org.gnome.desktop.interface color-scheme prefer-dark || gs org.gnome.desktop.interface color-scheme default;;
+    kde) plasma-apply-lookandfeel -a "$1" >/dev/null 2>&1 || echo "look-and-feel $1 not found (available: $(ls /usr/share/plasma/look-and-feel | tr '\n' ' '))";;
+    cinnamon) gs org.cinnamon.desktop.interface gtk-theme "$1"; gs org.cinnamon.theme name "$1"; gs org.cinnamon.desktop.wm.preferences theme "$1";;
+  esac; }
+set_cursor() { case $DE in gnome) gs org.gnome.desktop.interface cursor-theme "$1";; kde) plasma-apply-cursortheme "$1" >/dev/null 2>&1;; cinnamon) gs org.cinnamon.desktop.interface cursor-theme "$1";; esac; }
+set_font() { case $DE in gnome) gs org.gnome.desktop.interface font-name "$1";; kde) kw --file kdeglobals --group General --key font "${1% *},${1##* },-1,5,50,0,0,0,0,0";; cinnamon) gs org.cinnamon.desktop.interface font-name "$1";; esac; }
+set_taskbar() { # position bottom|top|left|right ; size px ; autohide on|off
+  pos=$(conf_get taskbar.position); pos=${pos:-bottom}; size=$(conf_get taskbar.size); size=${size:-44}; ah=$(conf_get taskbar.autohide); ah=${ah:-off}
+  case $DE in
+    gnome) gnome_ext user@example.com; gs org.gnome.shell.extensions.dash-to-dock dock-position "${pos^^}"; gs org.gnome.shell.extensions.dash-to-dock dash-max-icon-size "$size"; [ "$ah" = on ] && { gs org.gnome.shell.extensions.dash-to-dock dock-fixed false; gs org.gnome.shell.extensions.dash-to-dock autohide true; } || gs org.gnome.shell.extensions.dash-to-dock dock-fixed true;;
+    kde) hid=none; [ "$ah" = on ] && hid=autohide; plasma_js "var ps=panels();for(var i in ps){ps[i].location='$pos';ps[i].height=$size;ps[i].hiding='$hid';}";;
+    cinnamon) gs org.cinnamon panels-enabled "['1:0:$pos']"; gs org.cinnamon panels-height "['1:$size']"; gs org.cinnamon panels-autohide "['1:$([ "$ah" = on ] && echo true || echo false)']";;
+  esac; }
+set_startmenu() { # windows (kickoff) | classic (kicker) | fullscreen (kickerdash) | dock | grid | mint
+  case $DE in
+    kde) t=org.kde.plasma.kickoff; [ "$1" = classic ] && t=org.kde.plasma.kicker; [ "$1" = fullscreen ] && t=org.kde.plasma.kickerdash
+         plasma_js "var ps=panels();for(var i in ps){var ws=ps[i].widgets();for(var j in ws){var w=ws[j];if(w.type.indexOf('kick')>=0){var idx=w.index;w.remove();var n=ps[i].addWidget('$t');n.index=idx;}}}";;
+    gnome) case $1 in grid) gnome-extensions disable user@example.com 2>/dev/null;; dock) gnome_ext user@example.com; gs org.gnome.shell.extensions.dash-to-dock show-apps-at-top false;; windows|classic) gnome_ext user@example.com; gs org.gnome.shell.extensions.dash-to-dock show-apps-at-top true;; esac;;
+    cinnamon) d=$HOME/.config/cinnamon/spices/user@example.com; mkdir -p "$d"; for f in "$d"/*.json; do [ -f "$f" ] || continue; jq --arg l "$([ "$1" = mint ] && echo Menu || echo Start)" '."menu-label".value=$l' "$f" > "$f.tmp" && mv "$f.tmp" "$f"; done;;
+  esac; }
+set_keyboard_layout() { case $DE in gnome) gs org.gnome.desktop.input-sources sources "[('xkb','$1')]";; kde) kw --file kxkbrc --group Layout --key LayoutList "$1"; kw --file kxkbrc --group Layout --key Use true; qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1;; cinnamon) gs org.gnome.libgnomekbd.keyboard layouts "['$1']";; esac; }
+set_shortcut() { # "F1=emote"  or "<Super>e=nautilus"   (name is derived from the command)
+  key=${1%%=*}; cmd=${1#*=}; name=$(echo "$cmd" | awk '{print $1}' | xargs basename)
+  case $DE in
+    gnome|cinnamon) s=org.gnome.settings-daemon.plugins.media-keys; p=/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings; [ $DE = cinnamon ] && { s=org.cinnamon.desktop.keybindings; p=/org/cinnamon/desktop/keybindings/custom-keybindings; }
+      id=dyverz-$name
+      entry="$p/$id/"; [ $DE = cinnamon ] && entry="$id"
+      echo ",$list," | grep -q ",$entry," || list="$list,$entry"; list=$(echo "$list" | sed 's/^,//; s/,,*/,/g'); arr="[$(echo "$list" | sed "s/[^,]*/'&'/g")]"
+      if [ $DE = gnome ]; then gs $s custom-keybindings "$arr"; sub="$s.custom-keybinding:$p/$id/"; gs "$sub" name "$name"; gs "$sub" command "$cmd"; gs "$sub" binding "$key"
+      else gs $s custom-list "$arr"; sub="$s.custom-keybinding:$p/$id/"; gs "$sub" name "$name"; gs "$sub" command "$cmd"; gs "$sub" binding "['$key']"; fi;;
+    kde) d=$HOME/.local/share/applications; mkdir -p "$d"; printf '[Desktop Entry]\nType=Application\nName=%s\nExec=%s\nNoDisplay=true\n' "$name" "$cmd" > "$d/dyverz-hotkey-$name.desktop"
+      kw --file kglobalshortcutsrc --group services --group "dyverz-hotkey-$name.desktop" --key _launch "$key"; (kquitapp6 kglobalaccel 2>/dev/null; sleep 1; setsid kglobalaccel6 >/dev/null 2>&1 &);;
+  esac; }
+set_files() { case $1 in nautilus) a=org.gnome.Nautilus.desktop;; dolphin) a=org.kde.dolphin.desktop;; nemo) a=nemo.desktop;; *) a=$1;; esac; xdg-mime default "$a" inode/directory 2>/dev/null; }
+set_editor() { case $1 in gnome) a=org.gnome.TextEditor.desktop;; kate) a=org.kde.kate.desktop;; xed) a=xed.desktop;; *) a=$1;; esac; for m in text/plain text/x-python text/markdown application/json text/x-shellscript; do xdg-mime default "$a" $m 2>/dev/null; done; }
+set_settings() { case $1 in gnome) e=gnome-control-center; i=org.gnome.Settings;; kde) e=systemsettings; i=systemsettings;; cinnamon) e=cinnamon-settings; i=preferences-system;; *) e=$1; i=preferences-system;; esac
+  d=$HOME/.local/share/applications; mkdir -p "$d"; printf '[Desktop Entry]\nType=Application\nName=Settings\nExec=%s\nIcon=%s\nCategories=Settings;System;\n' "$e" "$i" > "$d/dyverz-settings.desktop"; }
+set_favorites() { # comma list of .desktop ids
+  case $DE in gnome) gs org.gnome.shell favorite-apps "[$(echo "$1" | sed "s/[^,]*/'&'/g")]";;
+    kde) plasma_js "var ps=panels();for(var i in ps){var ws=ps[i].widgets();for(var j in ws){if(ws[j].type=='org.kde.plasma.icontasks'){ws[j].currentConfigGroup=['General'];ws[j].writeConfig('launchers','$(echo "$1" | sed 's/[^,]*/applications:&/g')');}}}";;
+    cinnamon) gs org.cinnamon favorite-apps "[$(echo "$1" | sed "s/[^,]*/'&'/g")]";; esac; }
+set_boot() { sudo -n dyverz-boot "$@"; }
+
+cmd_set() { k=$1; v=$2; conf_set "$k" "$v"
+  case $k in wallpaper) set_wallpaper "$v";; icons) set_icons "$v";; theme) set_theme "$v";; cursor) set_cursor "$v";; font) set_font "$v";;
+    taskbar.*) set_taskbar;; startmenu) set_startmenu "$v";; keyboard.layout) set_keyboard_layout "$v";; shortcut) set_shortcut "$v";;
+    files) set_files "$v";; editor) set_editor "$v";; settings) set_settings "$v";; favorites) set_favorites "$v";;
+    boot.logo) set_boot logo "$v";; boot.title) set_boot title "$v";; boot.background) set_boot background "$v";; login.logo) set_boot login-logo "$v";;
+    *) echo "unknown key $k"; return 1;; esac; }
+
+cmd_apply() { look=$1; shift; files=""; settings=""; editor=""
+  while [ $# -gt 0 ]; do case $1 in --files) files=$2; shift;; --settings) settings=$2; shift;; --editor) editor=$2; shift;; esac; shift; done
+  conf_set look "$look"; [ -n "$files" ] && conf_set files "$files"; [ -n "$settings" ] && conf_set settings "$settings"; [ -n "$editor" ] && conf_set editor "$editor"
+  want=$(look_de "$look"); sudo -n dyverz-session "$(look_session "$look")" 2>/dev/null || true
+  if [ "$DE" = "$want" ]; then cmd_apply_now; else conf_set pending 1; echo "Look '$look' saved. It needs the $(look_session "$look") session: log out and pick it (or reboot) — it applies automatically at login."; fi; }
+cmd_apply_now() { look=$(conf_get look); [ -n "$look" ] || return 0; conf_set pending 0
+  . "/usr/share/dyverz/looks/$look.sh"            # look defaults (sets keys only if user hasn't overridden them)
+  for k in files editor settings; do v=$(conf_get $k); [ -n "$v" ] && set_$k "$v"; done
+  sc=$(conf_get shortcut); [ -n "$sc" ] || conf_set shortcut "F1=emote"; set_shortcut "$(conf_get shortcut)"
+  echo "look '$look' applied in $DE"; }
+default() { [ -n "$(conf_get "$1")" ] || conf_set "$1" "$2"; cmd_set "$1" "$(conf_get "$1")" >/dev/null; }   # used by look scripts
+
+case "${1:-}" in
+  apply) shift; cmd_apply "$@";;
+  apply-pending) [ "$(conf_get pending)" = 1 ] && [ "$DE" = "$(look_de "$(conf_get look)")" ] && cmd_apply_now; [ -f "$HOME/.config/dyverz/first-login" ] && { cmd_apply_now; rm -f "$HOME/.config/dyverz/first-login"; }; exit 0;;
+  set) shift; cmd_set "$1" "$2";;
+  get) shift; [ -n "${1:-}" ] && conf_get "$1" || cat "$CONF" 2>/dev/null;;
+  list) echo "looks: $(ls /usr/share/dyverz/looks/*.sh | xargs -n1 basename | sed 's/.sh//' | grep -v common | tr '\n' ' ')"; echo "current DE: $DE"; echo "icon themes: $(ls /usr/share/icons | tr '\n' ' ')"; echo "themes: $(ls /usr/share/themes | tr '\n' ' ')"; [ -d /usr/share/plasma/look-and-feel ] && echo "kde looks: $(ls /usr/share/plasma/look-and-feel | tr '\n' ' ')";;
+  session) sudo -n dyverz-session "$(look_session "$2")";;
+  *) sed -n '2,8p' "$0";;
+esac

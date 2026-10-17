@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Arm the first-boot wizard (run at install time, inside the target chroot): GDM autologins user dyverz-setup into a cage kiosk running dyverz-setup.
+set -e
+id dyverz-setup >/dev/null 2>&1 || useradd -r -m -d /var/lib/dyverz-setup -s /usr/bin/nologin -c "Dyverz Setup" dyverz-setup
+usermod -s /bin/bash dyverz-setup
+mkdir -p /var/lib/AccountsService/users; printf '[User]\nSession=dyverz-setup\nXSession=dyverz-setup\nSystemAccount=true\n' > /var/lib/AccountsService/users/dyverz-setup
+cat > /etc/gdm/custom.conf <<EOG
+[daemon]
+AutomaticLoginEnable=True
+AutomaticLogin=dyverz-setup
+DefaultSession=dyverz-setup.desktop
+WaylandEnable=true
+EOG
+rm -f /etc/dyverz/setup-done; systemctl enable dyverz-firstboot.service >/dev/null 2>&1 || true; echo "first-boot wizard armed"

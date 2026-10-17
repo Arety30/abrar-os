@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stamp the system as Dyverz OS (re-run by a pacman hook after `filesystem` upgrades).
+ED=$(cat /etc/dyverz/edition 2>/dev/null || echo all)
+cat > /etc/os-release <<EOG
+NAME="Dyverz OS"
+PRETTY_NAME="Dyverz OS ($ED edition)"
+ID=dyverz
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;43;108;255"
+HOME_URL="https://example.com"
+LOGO=dyverz
+EOG
+printf 'DISTRIB_ID=Dyverz\nDISTRIB_RELEASE=rolling\nDISTRIB_DESCRIPTION="Dyverz OS"\n' > /etc/lsb-release
+printf 'Dyverz OS \\r (\\l)\n\n' > /etc/issue

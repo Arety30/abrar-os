@@ -1,0 +1,5 @@
+[Default Applications]
+application/x-ms-dos-executable=dyverz-exe-install.desktop
+application/vnd.microsoft.portable-executable=dyverz-exe-install.desktop
+application/x-msi=dyverz-exe-install.desktop
+application/x-msdownload=dyverz-exe-install.desktop

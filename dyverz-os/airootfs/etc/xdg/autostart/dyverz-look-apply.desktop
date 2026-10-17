@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz look
+Exec=sh -c 'sleep 4; dyverz-look apply-pending'
+NoDisplay=true
+X-GNOME-Autostart-Phase=Applications

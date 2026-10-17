@@ -1,0 +1,2 @@
+# Cinnamon session (used by look: mint)
+cinnamon nemo xed xreader gnome-terminal gnome-screenshot cinnamon-translations

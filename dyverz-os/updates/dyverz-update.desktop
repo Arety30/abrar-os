@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz Update
+Comment=Check for and install updates (pacman, AUR, Flatpak, Snap) with your approval
+Exec=/usr/local/bin/dyverz-update-gui
+Icon=system-software-update
+Categories=System;Settings;

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install with Dyverz
+Comment=Install this Windows program into the C: drive
+Exec=/usr/local/bin/dyverz-exe-installer %f
+Icon=system-software-install
+NoDisplay=true
+MimeType=application/x-ms-dos-executable;application/x-msi;application/vnd.microsoft.portable-executable;

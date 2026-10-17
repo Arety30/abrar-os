@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=WinKernel Status
+Comment=Virtual Windows kernel and C: partition
+Exec=sh -c 'winkernel status; echo; read -p "Press Enter"'
+Icon=drive-harddisk
+Terminal=true
+Categories=System;

@@ -1,0 +1,9 @@
+[Unit]
+Description=Dyverz first-boot guard (re-arms the setup wizard until it completes)
+Before=display-manager.service
+ConditionPathExists=!/etc/dyverz/setup-done
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dyverz-firstboot-enable
+[Install]
+WantedBy=multi-user.target

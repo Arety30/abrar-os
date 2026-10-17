@@ -1,0 +1,7 @@
+[Unit]
+Description=Dyverz Update pre-download (no install)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dyverz-update download

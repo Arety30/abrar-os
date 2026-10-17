@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PowerShell 7 (preview)
+Comment=PowerShell with a C: drive on the WinKernel
+Exec=pwsh-preview
+Icon=utilities-terminal
+Terminal=true
+Categories=System;Utility;Development;

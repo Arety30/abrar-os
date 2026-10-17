@@ -1,0 +1,9 @@
+# system timer, enabled only in "download" mode: fetch pacman updates in the background, install waits for approval
+[Unit]
+Description=Dyverz Update pre-download
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=12h
+Persistent=true
+[Install]
+WantedBy=timers.target

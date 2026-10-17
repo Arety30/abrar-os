@@ -1,0 +1,8 @@
+# AUR packages (built once with yay into the local [dyverz] repo)
+wps-office-365 ttf-wps-fonts
+tuxpaint emote
+powershell-preview-bin
+snapd
+gnome-shell-extension-dash-to-dock
+yaru-gtk-theme yaru-icon-theme yaru-gnome-shell-theme
+mint-themes mint-y-icons mint-x-icons

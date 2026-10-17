@@ -1,0 +1,1 @@
+dyverz-setup ALL=(root) NOPASSWD: /usr/local/bin/dyverz-setup-apply

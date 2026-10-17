@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Command Prompt (Wine cmd) inside the WinKernel C: drive.  `wincmd /c "dir"` also works.
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-cdrive} WINEDEBUG=-all
+[ -d "$WINEPREFIX" ] || winkernel init
+cd /mnt/cdrive 2>/dev/null || cd "$WINEPREFIX/drive_c"
+if [ $# -eq 0 ] && [ -t 0 ]; then exec wine cmd; fi
+[ $# -eq 0 ] && exec ${TERMINAL:-xdg-terminal-exec} wine cmd 2>/dev/null || exec wine cmd "$@"

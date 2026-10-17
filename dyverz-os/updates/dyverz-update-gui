@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Dyverz Update — shows available updates and installs them only when the user says so."""
+import json, subprocess, sys, threading
+import gi
+gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
+from gi.repository import Adw, Gtk, GLib
+
+CLI = "/usr/local/bin/dyverz-update"
+MODES = [("ask", "Ask me before installing (recommended)"), ("download", "Download automatically, install when I approve"), ("manual", "Manual only — never remind me")]
+
+class Win(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Dyverz Update", default_width=720, default_height=560)
+        tv = Adw.ToolbarView(); hb = Adw.HeaderBar(); tv.add_top_bar(hb)
+        self.later = Gtk.Button(label="Later"); self.later.connect("clicked", lambda *_: self.close()); hb.pack_start(self.later)
+        self.install = Gtk.Button(label="Install now", css_classes=["suggested-action"]); self.install.connect("clicked", lambda *_: self.run()); hb.pack_end(self.install)
+        self.page = Adw.PreferencesPage(); self.groups = []
+        self.logv = Gtk.TextView(editable=False, monospace=True); self.logsw = Gtk.ScrolledWindow(child=self.logv, min_content_height=180, visible=False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL); box.append(Gtk.ScrolledWindow(child=self.page, vexpand=True)); box.append(self.logsw)
+        tv.set_content(box); self.set_content(tv); self.load()
+
+    def load(self):
+        for g in self.groups: self.page.remove(g)
+        self.groups = []
+        try: d = json.loads(subprocess.check_output([CLI, "check", "--json"], text=True))
+        except Exception as e: d = {"count": 0, "mode": "ask", "pacman": [], "aur": [], "flatpak": [], "snap": [str(e)]}
+        head = Adw.PreferencesGroup(title=f"{d['count']} update{'s' if d['count'] != 1 else ''} available" if d["count"] else "Dyverz OS is up to date",
+                                    description="Nothing is installed until you press Install now.")
+        dd = Gtk.DropDown(model=Gtk.StringList.new([m[1] for m in MODES]), valign=Gtk.Align.CENTER); dd.set_selected([m[0] for m in MODES].index(d.get("mode", "ask")))
+        dd.connect("notify::selected", lambda w, _: subprocess.Popen(["pkexec", CLI, "mode", MODES[w.get_selected()][0]]))
+        r = Adw.ActionRow(title="Update policy"); r.add_suffix(dd); head.add(r); self.page.add(head); self.groups.append(head)
+        for key, title in (("pacman", "System packages (pacman)"), ("aur", "AUR packages"), ("flatpak", "Flatpak apps"), ("snap", "Snap apps")):
+            if not d.get(key): continue
+            g = Adw.PreferencesGroup(title=title)
+            for line in d[key]: g.add(Adw.ActionRow(title=line))
+            self.page.add(g); self.groups.append(g)
+        self.install.set_sensitive(d["count"] > 0)
+
+    def run(self):
+        self.logsw.set_visible(True); self.install.set_sensitive(False); self.later.set_label("Close")
+        def worker():
+            p = subprocess.Popen(["pkexec", CLI, "install"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in p.stdout: GLib.idle_add(self.log, line)
+            p.wait(); GLib.idle_add(self.log, f"\n[exit {p.returncode}]\n"); GLib.idle_add(self.load)
+        threading.Thread(target=worker, daemon=True).start()
+    def log(self, s):
+        b = self.logv.get_buffer(); b.insert(b.get_end_iter(), s); self.logv.scroll_to_mark(b.get_insert(), 0, False, 0, 0)
+
+class App(Adw.Application):
+    def __init__(self): super().__init__(application_id="os.dyverz.Update")
+    def do_activate(self): Win(self).present()
+if __name__ == "__main__": sys.exit(App().run(sys.argv))

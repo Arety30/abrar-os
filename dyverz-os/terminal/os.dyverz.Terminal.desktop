@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz Terminal
+GenericName=Terminal
+Comment=Arch, Ubuntu, Kali, Python, Wine cmd and PowerShell tabs in one window
+Exec=dyverz-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=shell;prompt;command;commandline;cmd;powershell;ubuntu;kali;
+StartupNotify=true
+X-KDE-Shortcuts=Ctrl+Alt+T

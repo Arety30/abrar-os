@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Dyverz Customize — everything from wallpaper to boot screen, backed by `dyverz-look set`."""
+import gi, os, subprocess, glob
+gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
+from gi.repository import Gtk, Adw, Gio, GLib
+W = "/usr/share/dyverz/wallpapers"
+def run(*a): return subprocess.run(a, capture_output=True, text=True).stdout.strip()
+def setk(k, v): subprocess.Popen(["dyverz-look", "set", k, str(v)])
+def getk(k): return run("dyverz-look", "get", k)
+def ls(p): return sorted(d for d in os.listdir(p) if os.path.isdir(os.path.join(p, d))) if os.path.isdir(p) else []
+
+class App(Adw.Application):
+    def __init__(self): super().__init__(application_id="cloud.arety.DyverzCustomize")
+    def do_activate(self):
+        w = Adw.PreferencesWindow(application=self, title="Dyverz Customize", default_width=760, default_height=640)
+        for page in (self.p_look(), self.p_desktop(), self.p_taskbar(), self.p_keyboard(), self.p_boot(), self.p_apps()): w.add(page)
+        w.present()
+    # helpers
+    def combo(self, group, title, key, choices, sub=""):
+        r = Adw.ComboRow(title=title, subtitle=sub); m = Gtk.StringList.new(choices); r.set_model(m)
+        cur = getk(key)
+        if cur in choices: r.set_selected(choices.index(cur))
+        r.connect("notify::selected", lambda row, _: setk(key, choices[row.get_selected()])); group.add(r); return r
+    def switch(self, group, title, key, sub=""):
+        r = Adw.SwitchRow(title=title, subtitle=sub); r.set_active(getk(key) == "on")
+        r.connect("notify::active", lambda row, _: setk(key, "on" if row.get_active() else "off")); group.add(r)
+    def spin(self, group, title, key, lo, hi, dflt):
+        r = Adw.SpinRow.new_with_range(lo, hi, 2); r.set_title(title)
+        try: r.set_value(int(getk(key) or dflt))
+        except ValueError: r.set_value(dflt)
+        r.connect("notify::value", lambda row, _: setk(key, int(row.get_value()))); group.add(r)
+    def entry(self, group, title, key, sub=""):
+        r = Adw.EntryRow(title=title); r.set_text(getk(key)); r.connect("apply", lambda row: setk(key, row.get_text())); r.set_show_apply_button(True); group.add(r)
+    def filebtn(self, group, title, key, sub, filt="Images"):
+        r = Adw.ActionRow(title=title, subtitle=sub or getk(key)); b = Gtk.Button(label="Choose…", valign=Gtk.Align.CENTER)
+        def pick(_):
+            d = Gtk.FileDialog(title=title); f = Gtk.FileFilter(); f.set_name(filt); f.add_mime_type("image/png"); f.add_mime_type("image/jpeg")
+            fl = Gio.ListStore.new(Gtk.FileFilter); fl.append(f); d.set_filters(fl)
+            def done(dlg, res):
+                try: p = dlg.open_finish(res).get_path(); setk(key, p); r.set_subtitle(p)
+                except GLib.Error: pass
+            d.open(self.get_active_window(), None, done)
+        b.connect("clicked", pick); r.add_suffix(b); group.add(r)
+    def button(self, group, title, sub, cmd):
+        r = Adw.ActionRow(title=title, subtitle=sub); b = Gtk.Button(label="Open", valign=Gtk.Align.CENTER); b.connect("clicked", lambda _: subprocess.Popen(cmd, shell=True)); r.add_suffix(b); group.add(r)
+    # pages
+    def p_look(self):
+        p = Adw.PreferencesPage(title="Look", icon_name="preferences-desktop-theme-symbolic"); g = Adw.PreferencesGroup(title="Preset look", description="Windows, macOS, Ubuntu, Fedora, Linux Mint, plain GNOME or KDE. Switching to another desktop takes effect at next login.")
+        looks = ["windows", "mac", "ubuntu", "fedora", "mint", "gnome", "kde"]; r = Adw.ComboRow(title="Look"); r.set_model(Gtk.StringList.new(looks)); cur = getk("look")
+        if cur in looks: r.set_selected(looks.index(cur))
+        b = Gtk.Button(label="Apply", valign=Gtk.Align.CENTER, css_classes=["suggested-action"]); b.connect("clicked", lambda _: subprocess.Popen(["dyverz-look", "apply", looks[r.get_selected()]])); r.add_suffix(b); g.add(r); p.add(g)
+        g2 = Adw.PreferencesGroup(title="Default apps")
+        self.combo(g2, "File manager", "files", ["nautilus", "dolphin", "nemo"]); self.combo(g2, "Settings app", "settings", ["gnome", "kde", "cinnamon"]); self.combo(g2, "Text editor", "editor", ["gnome", "kate", "xed"]); p.add(g2); return p
+    def p_desktop(self):
+        p = Adw.PreferencesPage(title="Home screen", icon_name="preferences-desktop-wallpaper-symbolic"); g = Adw.PreferencesGroup(title="Wallpaper")
+        wp = [os.path.basename(f)[:-4] for f in sorted(glob.glob(W + "/*.png"))]; self.combo(g, "Built-in wallpaper", "wallpaper", wp); self.filebtn(g, "Custom wallpaper", "wallpaper", "Any PNG/JPG"); p.add(g)
+        g2 = Adw.PreferencesGroup(title="Icons, theme, cursor, font")
+        self.combo(g2, "Icon theme", "icons", ls("/usr/share/icons")); self.combo(g2, "Theme", "theme", ls("/usr/share/themes") + ls("/usr/share/plasma/look-and-feel"))
+        self.combo(g2, "Cursor", "cursor", [d for d in ls("/usr/share/icons") if os.path.isdir(f"/usr/share/icons/{d}/cursors")]); self.entry(g2, "Font (e.g. Noto Sans 11)", "font"); p.add(g2); return p
+    def p_taskbar(self):
+        p = Adw.PreferencesPage(title="Taskbar & menu", icon_name="view-list-symbolic"); g = Adw.PreferencesGroup(title="Taskbar / dock")
+        self.combo(g, "Position", "taskbar.position", ["bottom", "top", "left", "right"]); self.spin(g, "Size (px)", "taskbar.size", 24, 96, 44); self.switch(g, "Auto-hide", "taskbar.autohide"); p.add(g)
+        g2 = Adw.PreferencesGroup(title="Start menu"); self.combo(g2, "Style", "startmenu", ["windows", "classic", "fullscreen", "dock", "grid", "mint"], "windows = Windows-style launcher, classic = cascading, fullscreen = launchpad, dock/grid = GNOME"); self.entry(g2, "Pinned apps (comma-separated .desktop ids)", "favorites"); p.add(g2); return p
+    def p_keyboard(self):
+        p = Adw.PreferencesPage(title="Keyboard", icon_name="input-keyboard-symbolic"); g = Adw.PreferencesGroup(title="Layout")
+        self.combo(g, "Layout", "keyboard.layout", ["us", "gb", "ara", "de", "fr", "es", "in", "pk", "tr", "ru"]); p.add(g)
+        g2 = Adw.PreferencesGroup(title="Shortcuts", description="KEY=command, e.g. F1=emote or <Super>e=nautilus"); self.entry(g2, "Custom shortcut", "shortcut")
+        self.button(g2, "All shortcuts", "Open the desktop's full shortcut editor", "gnome-control-center keyboard 2>/dev/null || systemsettings kcm_keys 2>/dev/null || cinnamon-settings keyboard"); p.add(g2); return p
+    def p_boot(self):
+        p = Adw.PreferencesPage(title="Boot & login", icon_name="computer-symbolic"); g = Adw.PreferencesGroup(title="Boot screen (Plymouth)")
+        self.filebtn(g, "Boot logo", "boot.logo", "PNG shown while booting"); self.entry(g, "Boot menu title", "boot.title"); self.filebtn(g, "Boot menu background", "boot.background", "GRUB background image"); p.add(g)
+        g2 = Adw.PreferencesGroup(title="Login screen"); self.filebtn(g2, "Login logo", "login.logo", "Shown on the GDM login screen"); p.add(g2); return p
+    def p_apps(self):
+        p = Adw.PreferencesPage(title="Advanced", icon_name="applications-system-symbolic"); g = Adw.PreferencesGroup(title="Native tools")
+        self.button(g, "GNOME Tweaks", "Fine-grained GNOME options", "gnome-tweaks"); self.button(g, "KDE System Settings", "Everything Plasma", "systemsettings"); self.button(g, "Cinnamon Settings", "Everything Cinnamon", "cinnamon-settings")
+        self.button(g, "WinKernel", "Virtual Windows kernel status", "sh -c 'winkernel status; read'"); p.add(g); return p
+App().run(None)

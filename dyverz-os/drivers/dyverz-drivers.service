@@ -1,0 +1,11 @@
+[Unit]
+Description=Dyverz Driver Manager — scan hardware and install drivers (first boot / after hardware change)
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/dyverz/drivers/last-install
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dyverz-drivers install --yes
+TimeoutStartSec=1h
+[Install]
+WantedBy=multi-user.target

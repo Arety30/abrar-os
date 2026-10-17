@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Ubuntu-style adduser/deluser for Dyverz OS.
+#   adduser <name> [--admin] [--fullname "Full Name"] [--password PW]     deluser <name> [--remove-home]
+set -euo pipefail; [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+me=$(basename "$0"); [ "$me" = dyverz-adduser ] && { me=$1; shift; }   # dyverz-adduser adduser|deluser ...
+groupadd -f sudo; groupadd -f users
+if [ "$me" = deluser ]; then u=$1; [ "${2:-}" = --remove-home ] && userdel -r "$u" || userdel "$u"; echo "Removed user $u."; exit 0; fi
+u=$1; shift; admin=0; full=""; pw=""
+while [ $# -gt 0 ]; do case $1 in --admin) admin=1;; --fullname) full=$2; shift;; --password) pw=$2; shift;; esac; shift; done
+[ -n "$full" ] || { read -rp "Full Name []: " full; }
+useradd -m -U -s /bin/bash -c "$full" -G users,audio,video,storage,docker,input "$u"
+if [ -n "$pw" ]; then echo "$u:$pw" | chpasswd; else passwd "$u"; fi
+[ $admin = 1 ] && usermod -aG wheel,sudo "$u" && echo "$u is an administrator (sudo)."
+mkdir -p /home/$u/.config/dyverz; touch /home/$u/.config/dyverz/first-login; chown -R $u:$u /home/$u/.config
+echo "Adding user \`$u' ... done."

@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Dyverz Driver Manager — scans the hardware and installs the right drivers.
+#   dyverz-drivers scan [--json]      Device-Manager style report (no changes)
+#   dyverz-drivers install [--yes]    install what the scan recommends (root)
+#   dyverz-drivers win                set up the Dyverz Win Kernel drivers (DXVK, fonts, runtimes) — run as your user
+#   dyverz-drivers status             last run
+set -uo pipefail
+STATE=/var/lib/dyverz/drivers; LOG=/var/log/dyverz-drivers.log
+declare -a ROWS=() PKGS=() AUR=() SVCS=() WIN=()
+have() { pacman -Q "$1" >/dev/null 2>&1; }
+row()  { ROWS+=("$1|$2|$3|$4|$5"); }   # category|device|driver in use|status|packages
+need() { for p in "$@"; do [[ " ${PKGS[*]} " == *" $p "* ]] || PKGS+=("$p"); done; }
+naur() { for p in "$@"; do [[ " ${AUR[*]} " == *" $p "* ]] || AUR+=("$p"); done; }
+svc()  { SVCS+=("$1"); }
+mark() { local ok=1; for p in "$@"; do have "$p" || ok=0; done; [[ $ok = 1 ]] && echo "installed" || echo "missing"; }
+pci_driver() { lspci -ks "$1" 2>/dev/null | awk -F': ' '/Kernel driver in use/{print $2}'; }
+
+scan() {
+  ROWS=(); PKGS=(); AUR=(); SVCS=(); WIN=()
+  local VIRT; VIRT=$(systemd-detect-virt 2>/dev/null || echo none)
+  # ---- CPU microcode
+  local VEND; VEND=$(awk -F': ' '/vendor_id/{print $2; exit}' /proc/cpuinfo)
+  local MODEL; MODEL=$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)
+  case $VEND in
+    GenuineIntel) need intel-ucode; row CPU "$MODEL" "microcode: $(grep -m1 microcode /proc/cpuinfo | awk '{print $3}')" "$(mark intel-ucode)" intel-ucode;;
+    AuthenticAMD) need amd-ucode;   row CPU "$MODEL" "microcode: $(grep -m1 microcode /proc/cpuinfo | awk '{print $3}')" "$(mark amd-ucode)" amd-ucode;;
+    *) row CPU "$MODEL" "-" ok "-";;
+  esac
+  # ---- kernel headers (for DKMS drivers)
+  local K; K=$(pacman -Qq | grep -Ex 'linux(-lts|-zen|-hardened)?' | head -1); [[ -n $K ]] && need "$K-headers"
+  # ---- GPU(s)
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    local slot=${line%% *} id name drv
+    id=$(lspci -ns "$slot" | awk '{print $3}'); name=$(lspci -s "$slot" | sed 's/^[^ ]* [^:]*: //'); drv=$(pci_driver "$slot")
+    case ${id%%:*} in
+      10de) need nvidia-open-dkms nvidia-utils lib32-nvidia-utils vulkan-icd-loader lib32-vulkan-icd-loader; row GPU "$name" "${drv:-none}" "$(mark nvidia-utils)" "nvidia-open-dkms nvidia-utils";;
+      1002) need mesa lib32-mesa vulkan-radeon lib32-vulkan-radeon libva-mesa-driver vulkan-icd-loader lib32-vulkan-icd-loader; row GPU "$name" "${drv:-none}" "$(mark vulkan-radeon)" "mesa vulkan-radeon";;
+      8086) need mesa lib32-mesa vulkan-intel lib32-vulkan-intel intel-media-driver vulkan-icd-loader lib32-vulkan-icd-loader; row GPU "$name" "${drv:-none}" "$(mark vulkan-intel)" "mesa vulkan-intel intel-media-driver";;
+      15ad|80ee|1234|1b36) need mesa lib32-mesa vulkan-swrast; row GPU "$name" "${drv:-none}" "$(mark mesa)" "mesa (virtual GPU)";;
+      *) need mesa; row GPU "$name" "${drv:-none}" "$(mark mesa)" mesa;;
+    esac
+  done < <(lspci -D 2>/dev/null | grep -E ' (VGA|3D|Display) ')
+  # ---- virtual machine guest tools
+  case $VIRT in
+    oracle)  need virtualbox-guest-utils; svc vboxservice; row "Virtual machine" "VirtualBox guest" "vboxguest" "$(mark virtualbox-guest-utils)" virtualbox-guest-utils;;
+    vmware)  need open-vm-tools; svc vmtoolsd; row "Virtual machine" "VMware guest" "vmw" "$(mark open-vm-tools)" open-vm-tools;;
+    kvm|qemu) need qemu-guest-agent spice-vdagent; svc qemu-guest-agent; row "Virtual machine" "QEMU/KVM guest" "virtio" "$(mark qemu-guest-agent)" "qemu-guest-agent spice-vdagent";;
+    microsoft) need hyperv; svc hv_kvp_daemon; row "Virtual machine" "Hyper-V guest" "hv" "$(mark hyperv)" hyperv;;
+    none) need fwupd; svc fwupd; row Firmware "UEFI/device firmware updates" "fwupd" "$(mark fwupd)" fwupd;;
+  esac
+  # ---- network
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    local slot=${line%% *} id name drv; id=$(lspci -ns "$slot" | awk '{print $3}'); name=$(lspci -s "$slot" | sed 's/^[^ ]* [^:]*: //'); drv=$(pci_driver "$slot")
+    need linux-firmware
+    if [[ ${id%%:*} = 14e4 && -z $drv ]]; then naur broadcom-wl-dkms; row Network "$name" none missing broadcom-wl-dkms
+    else row Network "$name" "${drv:-none}" "$([[ -n $drv ]] && echo ok || echo missing)" linux-firmware; fi
+  done < <(lspci -D 2>/dev/null | grep -E ' (Ethernet|Network) controller')
+  # ---- bluetooth
+  if [[ -d /sys/class/bluetooth && -n $(ls /sys/class/bluetooth 2>/dev/null) ]] || lsusb 2>/dev/null | grep -qi bluetooth; then
+    need bluez bluez-utils; svc bluetooth; row Bluetooth "$(lsusb 2>/dev/null | grep -i bluetooth | head -1 | sed 's/.*ID [0-9a-f:]* //' || echo adapter)" btusb "$(mark bluez)" "bluez bluez-utils"
+  fi
+  # ---- audio
+  local A; A=$(lspci 2>/dev/null | grep -iE 'audio|multimedia' | head -1 | sed 's/^[^ ]* [^:]*: //')
+  if [[ -n $A ]]; then
+    need pipewire pipewire-pulse pipewire-alsa wireplumber alsa-utils
+    [[ $A == *Intel* && $VIRT = none ]] && need sof-firmware alsa-ucm-conf
+    row Audio "$A" "$(pci_driver "$(lspci -D | grep -iE 'audio|multimedia' | head -1 | cut -d' ' -f1)")" "$(mark pipewire wireplumber)" "pipewire wireplumber"
+  fi
+  # ---- input / laptop bits
+  if ls /sys/class/power_supply/ 2>/dev/null | grep -q BAT; then need power-profiles-daemon; svc power-profiles-daemon; row Power "Laptop battery" "acpi" "$(mark power-profiles-daemon)" power-profiles-daemon; fi
+  if lsusb 2>/dev/null | grep -qiE '06cb:|27c6:|138a:|1c7a:|fingerprint'; then need fprintd; row Security "Fingerprint reader" "libfprint" "$(mark fprintd)" fprintd; fi
+  [[ -d /sys/bus/thunderbolt/devices && -n $(ls /sys/bus/thunderbolt/devices 2>/dev/null) ]] && { need bolt; row Thunderbolt "Thunderbolt/USB4 controller" thunderbolt "$(mark bolt)" bolt; }
+  ls /dev/video* >/dev/null 2>&1 && { need v4l-utils; row Camera "Video capture device(s): $(ls /dev/video* | tr '\n' ' ')" uvcvideo "$(mark v4l-utils)" v4l-utils; }
+  # ---- printing (always useful)
+  need cups cups-pdf system-config-printer; svc cups; row Printing "Printers (CUPS, PDF printer)" cups "$(mark cups)" "cups cups-pdf"
+  # ---- Win Kernel side: what Wine/games need on this GPU
+  local vk="no"; command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary >/dev/null 2>&1 && vk=yes
+  WIN+=("Direct3D 9-12 → Vulkan (DXVK/VKD3D): $([[ $vk = yes ]] && echo 'GPU has Vulkan — dxvk vkd3d' || echo 'no Vulkan — wined3d (OpenGL) only')")
+  WIN+=("32-bit games: lib32 libraries (multilib) — $(have lib32-mesa && echo installed || echo missing)")
+  WIN+=("Windows fonts + runtimes: corefonts, vcrun2022, dotnet48 via winetricks")
+  need wine winetricks wine-mono wine-gecko lib32-gnutls lib32-libpulse lib32-alsa-plugins gamemode lib32-gamemode
+  [[ $vk = yes ]] && need dxvk vkd3d
+}
+
+print_table() {
+  printf '%-16s %-52s %-14s %-10s %s\n' CATEGORY DEVICE DRIVER STATUS PACKAGES; printf '%s\n' "$(printf '=%.0s' {1..120})"
+  for r in "${ROWS[@]}"; do IFS='|' read -r c d k s p <<<"$r"; printf '%-16s %-52.52s %-14.14s %-10s %s\n' "$c" "$d" "$k" "$s" "$p"; done
+  echo; echo "Dyverz Win Kernel:"; for w in "${WIN[@]}"; do echo "  - $w"; done
+  echo; echo "To install: $(missing_pkgs | tr '\n' ' ')"; [[ ${#AUR[@]} -gt 0 ]] && echo "From AUR:   ${AUR[*]}"; echo "Services:   ${SVCS[*]:-none}"
+}
+missing_pkgs() { for p in "${PKGS[@]}"; do have "$p" || echo "$p"; done; }
+print_json() {
+  python3 - "$(printf '%s\n' "${ROWS[@]}")" "$(missing_pkgs | tr '\n' ' ')" "${AUR[*]}" "${SVCS[*]}" "$(printf '%s\n' "${WIN[@]}")" <<'PY'
+import json,sys
+rows=[dict(zip(("category","device","driver","status","packages"),l.split("|"))) for l in sys.argv[1].splitlines() if l]
+print(json.dumps({"devices":rows,"install":sys.argv[2].split(),"aur":sys.argv[3].split(),"services":sys.argv[4].split(),"winkernel":sys.argv[5].splitlines()},indent=1))
+PY
+}
+
+case ${1:-scan} in
+  scan) scan; [[ ${2:-} = --json ]] && print_json || print_table;;
+  install)
+    [[ $EUID -eq 0 ]] || { echo "run as root (sudo dyverz-drivers install)"; exit 1; }
+    scan; M=$(missing_pkgs | tr '\n' ' ')
+    echo "Will install: ${M:-nothing}"; [[ ${#AUR[@]} -gt 0 ]] && echo "AUR: ${AUR[*]}"; echo "Enable: ${SVCS[*]:-nothing}"
+    if [[ ${2:-} != --yes ]]; then read -rp "Continue? [y/N] " a; [[ $a =~ ^[Yy] ]] || exit 0; fi
+    mkdir -p "$STATE"; { echo "== $(date -Is) install"; echo "$M"; } >> "$LOG"
+    if [[ $M == *lib32-* ]] && ! grep -q '^\[multilib\]' /etc/pacman.conf; then printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf; fi
+    [[ -n $M ]] && pacman -Sy --noconfirm --needed $M 2>&1 | tee -a "$LOG" | grep -vE '^(  |$)' | tail -20
+    if [[ ${#AUR[@]} -gt 0 ]]; then U=${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}; sudo -u "$U" yay -S --noconfirm --needed "${AUR[@]}" 2>&1 | tail -5 | tee -a "$LOG" || echo "AUR install failed (see $LOG)"; fi
+    for s in "${SVCS[@]}"; do systemctl enable "$s" >/dev/null 2>&1 && echo "enabled $s"; done
+    date -Is > "$STATE/last-install"; echo "Driver install finished. Reboot if a kernel module (GPU, VirtualBox, DKMS) was added.";;
+  win)
+    [[ $EUID -ne 0 ]] || { echo "run as your normal user"; exit 1; }
+    export WINEPREFIX=$HOME/.dyverz-win WINEDEBUG=-all; [[ -d $WINEPREFIX ]] || dyverz-winkernel init-user
+    echo "== Dyverz Win Kernel drivers into $WINEPREFIX"
+    if command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo --summary >/dev/null 2>&1; then
+      if have dxvk; then setup_dxvk install 2>/dev/null || winetricks -q dxvk; else winetricks -q dxvk; fi; echo "DXVK: installed"
+      have vkd3d && (setup_vkd3d_proton install 2>/dev/null || winetricks -q vkd3d) && echo "VKD3D: installed"
+    else echo "no Vulkan GPU — skipping DXVK (Direct3D will use OpenGL via wined3d)"; fi
+    winetricks -q corefonts vcrun2022 2>&1 | tail -2; echo "fonts + Visual C++ runtime: installed"
+    mkdir -p "$HOME/.config/dyverz"; date -Is > "$HOME/.config/dyverz/win-drivers-done"; echo "done";;
+  status) cat "$STATE/last-install" 2>/dev/null || echo "never installed"; tail -3 "$LOG" 2>/dev/null;;
+  *) sed -n '2,7p' "$0";;
+esac

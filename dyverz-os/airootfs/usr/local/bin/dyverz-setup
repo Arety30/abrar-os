@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Dyverz Setup — first-boot wizard (runs full-screen in a cage kiosk as user dyverz-setup)."""
+import gi, subprocess, json, os, re
+gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
+from gi.repository import Gtk, Adw, GLib
+LOOKS = [("windows", "Windows", "Taskbar, Start menu, Win11 icons (KDE Plasma)"), ("mac", "macOS", "Dock, top bar, WhiteSur (GNOME)"),
+         ("ubuntu", "Ubuntu", "Left dock, Yaru (GNOME)"), ("fedora", "Fedora", "Clean stock GNOME"), ("mint", "Linux Mint", "Mint-Y, bottom panel (Cinnamon)"),
+         ("gnome", "GNOME", "Plain GNOME"), ("kde", "KDE Plasma", "Plain Breeze")]
+def have(session): return os.path.exists(f"/usr/share/wayland-sessions/{session}.desktop") or os.path.exists(f"/usr/share/xsessions/{session}.desktop")
+SESSION = {"windows": "plasma", "kde": "plasma", "mint": "cinnamon"}
+class Wiz(Adw.Application):
+    def __init__(self): super().__init__(application_id="cloud.arety.DyverzSetup"); self.a = {"look": "windows", "files": "dolphin", "settings": "kde", "editor": "kate"}
+    def do_activate(self):
+        self.w = Adw.ApplicationWindow(application=self, title="Dyverz Setup"); self.w.fullscreen()
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        tv = Adw.ToolbarView(); tv.add_top_bar(Adw.HeaderBar(show_end_title_buttons=False)); tv.set_content(self.stack); self.w.set_content(tv)
+        for name, fn in [("welcome", self.pg_welcome), ("user", self.pg_user), ("look", self.pg_look), ("apps", self.pg_apps), ("done", self.pg_done)]: self.stack.add_named(fn(), name)
+        self.w.present()
+    def page(self, title, sub, body, nxt, back=None, nxt_label="Next"):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_top=48, margin_bottom=48, margin_start=96, margin_end=96, valign=Gtk.Align.CENTER)
+        box.append(Gtk.Image(icon_name="dyverz", pixel_size=96)); box.append(Gtk.Label(label=title, css_classes=["title-1"])); box.append(Gtk.Label(label=sub, css_classes=["dim-label"], wrap=True))
+        box.append(body); bb = Gtk.Box(spacing=12, halign=Gtk.Align.END)
+        if back: b = Gtk.Button(label="Back"); b.connect("clicked", lambda _: self.stack.set_visible_child_name(back)); bb.append(b)
+        n = Gtk.Button(label=nxt_label, css_classes=["suggested-action", "pill"]); n.connect("clicked", nxt); bb.append(n); box.append(bb)
+        sc = Gtk.ScrolledWindow(); sc.set_child(Adw.Clamp(child=box, maximum_size=760)); return sc
+    def pg_welcome(self):
+        return self.page("Welcome to Dyverz OS", "One OS, any look. Let's create your account and pick how it should feel.", Gtk.Box(), lambda _: self.stack.set_visible_child_name("user"), nxt_label="Get started")
+    def pg_user(self):
+        g = Adw.PreferencesGroup(title="Your account (Ubuntu-style)"); self.e = {}
+        for k, t in [("fullname", "Your name"), ("username", "Username"), ("hostname", "Computer name")]: r = Adw.EntryRow(title=t); g.add(r); self.e[k] = r
+        for k, t in [("password", "Password"), ("password2", "Confirm password")]: r = Adw.PasswordEntryRow(title=t); g.add(r); self.e[k] = r
+        self.e["hostname"].set_text("dyverz-pc"); self.err = Gtk.Label(css_classes=["error"]); box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8); box.append(g); box.append(self.err)
+        self.e["fullname"].connect("changed", lambda r: self.e["username"].set_text(re.sub(r"[^a-z0-9]", "", r.get_text().lower().split(" ")[0])[:32]))
+        def nxt(_):
+            v = {k: r.get_text() for k, r in self.e.items()}
+            if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", v["username"]): self.err.set_text("Username: lowercase letters, digits, - or _"); return
+            if len(v["password"]) < 1 or v["password"] != v["password2"]: self.err.set_text("Passwords are empty or do not match"); return
+            self.a.update(v); self.stack.set_visible_child_name("look")
+        return self.page("Who are you?", "This account will be an administrator.", box, nxt, back="welcome")
+    def pg_look(self):
+        g = Adw.PreferencesGroup(title="Choose a look"); first = None
+        for key, name, desc in LOOKS:
+            if not have(SESSION.get(key, "gnome")): continue
+            r = Adw.ActionRow(title=name, subtitle=desc); c = Gtk.CheckButton(group=first); first = first or c; c.set_active(key == self.a["look"])
+            c.connect("toggled", lambda b, k=key: b.get_active() and self.a.__setitem__("look", k)); r.add_prefix(c); r.set_activatable_widget(c); g.add(r)
+        return self.page("How should it look?", "You can change this any time in Dyverz Customize.", g, lambda _: self.stack.set_visible_child_name("apps"), back="user")
+    def pg_apps(self):
+        g = Adw.PreferencesGroup(title="Pick your apps"); self.c = {}
+        for key, title, opts in [("files", "File manager", [("nautilus", "Files (GNOME)"), ("dolphin", "Dolphin (KDE)"), ("nemo", "Nemo (Mint)")]),
+                                 ("settings", "Settings app", [("gnome", "GNOME Settings"), ("kde", "KDE System Settings"), ("cinnamon", "Cinnamon Settings")]),
+                                 ("editor", "Text editor", [("gnome", "GNOME Text Editor"), ("kate", "Kate (KDE)"), ("xed", "Xed (Mint)")])]:
+            r = Adw.ComboRow(title=title); r.set_model(Gtk.StringList.new([o[1] for o in opts])); r.connect("notify::selected", lambda row, _, k=key, o=opts: self.a.__setitem__(k, o[row.get_selected()][0])); g.add(r); self.c[key] = (r, opts)
+        def nxt(_): self.stack.set_visible_child_name("done"); GLib.timeout_add(300, self.apply)
+        return self.page("Your apps", "Which file manager, settings app and text editor do you want as defaults?", g, nxt, back="look", nxt_label="Finish")
+    def pg_done(self):
+        self.spin = Gtk.Spinner(spinning=True, width_request=48, height_request=48); self.status = Gtk.Label(label="Setting things up…")
+        b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12); b.append(self.spin); b.append(self.status)
+        return self.page("Almost there", "Creating your account and applying your choices.", b, lambda _: None, nxt_label=" ")
+    def apply(self):
+        def worker():
+            p = subprocess.run(["sudo", "-n", "/usr/local/bin/dyverz-setup-apply", json.dumps(self.a)], capture_output=True, text=True)
+            GLib.idle_add(self.status.set_text, "Done! Restarting…" if p.returncode == 0 else "Failed: " + (p.stderr or p.stdout)[-400:])
+        import threading; threading.Thread(target=worker, daemon=True).start(); return False
+Wiz().run(None)

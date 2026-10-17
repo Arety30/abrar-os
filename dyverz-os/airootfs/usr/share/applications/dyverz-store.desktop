@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz Store
+Comment=Apps from Flathub, Snap, pacman and Windows installers in one place
+Exec=plasma-discover
+Icon=plasmadiscover
+Terminal=false
+Categories=System;

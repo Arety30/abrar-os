@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Dyverz .exe installer — install a Windows program into the virtual C: partition and put it in the app menu.
+#   dyverz-exe-installer Setup.exe      (also the "Install with Dyverz" right-click action)
+set -u
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-dyverz} WINEDEBUG=-all
+[[ -d $WINEPREFIX ]] || /usr/local/bin/dyverz-winkernel init-user >/dev/null
+f=${1:-}; [[ -f $f ]] || { echo "usage: dyverz-exe-installer <installer.exe|.msi>"; exit 1; }
+APPS=$HOME/.local/share/applications; mkdir -p "$APPS"
+before=$(find "$APPS" /mnt/cdrive/Program\ Files /mnt/cdrive/Program\ Files\ \(x86\) -name '*.desktop' -o -name '*.exe' 2>/dev/null | sort)
+notify() { command -v notify-send >/dev/null && notify-send -i wine "Dyverz installer" "$1" || echo "$1"; }
+notify "Installing $(basename "$f") into C:\\ …"
+case "${f,,}" in *.msi) wine msiexec /i "$f";; *) wine "$f";; esac
+rc=$?
+after=$(find "$APPS" /mnt/cdrive/Program\ Files /mnt/cdrive/Program\ Files\ \(x86\) -name '*.desktop' -o -name '*.exe' 2>/dev/null | sort)
+new_exe=$(comm -13 <(echo "$before") <(echo "$after") | grep -i '\.exe$' | grep -viE 'unins|setup|update|crash|helper|report' | head -1)
+# Wine already drops .desktop files under ~/.local/share/applications/wine/ for Start-menu entries;
+# if the installer made none, create one for the main new .exe so it shows up in the app menu.
+if [[ -n $new_exe ]] && ! comm -13 <(echo "$before") <(echo "$after") | grep -q '\.desktop$'; then
+  name=$(basename "${new_exe%.exe}")
+  cat > "$APPS/dyverz-$name.desktop" <<D
+[Desktop Entry]
+Type=Application
+Name=$name
+Exec=/usr/local/bin/dyverz-run "$new_exe"
+Icon=wine
+Categories=Wine;
+D
+fi
+update-desktop-database "$APPS" 2>/dev/null
+[[ $rc -eq 0 ]] && notify "Installed. Look for it in the app menu (Wine section)." || notify "Installer exited with code $rc"
+exit $rc

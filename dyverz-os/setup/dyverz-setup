@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""Dyverz OS initial setup (first boot / pre-install wizard).
+
+Collects: edition (look), apps (file manager / settings / text editor),
+admin user (Ubuntu style: first user is the administrator), computer name,
+auto-login.  Writes /etc/dyverz/setup.json and runs `dyverz-apply` as root.
+"""
+import json, os, re, subprocess, sys, threading
+import gi
+gi.require_version("Gtk", "4.0"); gi.require_version("Adw", "1")
+from gi.repository import Adw, Gtk, GLib, Pango
+
+CONF_DIR = "/etc/dyverz"
+CONF = os.path.join(CONF_DIR, "setup.json")
+APPLY = "/usr/local/bin/dyverz-apply"
+
+EDITIONS = [
+    ("windows", "Windows look",    "KDE Plasma: bottom taskbar, centred start menu, Fluent icons"),
+    ("mac",     "macOS look",      "GNOME: top bar + dock, WhiteSur theme and icons"),
+    ("ubuntu",  "Ubuntu look",     "GNOME: Yaru theme, left dock, Ubuntu wallpapers"),
+    ("fedora",  "Fedora look",     "GNOME: stock Adwaita, activities overview"),
+    ("mint",    "Linux Mint look", "Cinnamon: Mint-Y theme, classic bottom panel"),
+]
+FILE_MANAGERS = [("nautilus", "Files (GNOME / macOS style)"), ("dolphin", "Dolphin (KDE / Windows style)"), ("nemo", "Nemo (Cinnamon / Mint style)")]
+SETTINGS_APPS = [("gnome-control-center", "GNOME Settings (macOS style)"), ("systemsettings", "KDE System Settings (Windows style)"), ("cinnamon-settings", "Cinnamon Settings (Mint style)")]
+EDITORS = [("gnome-text-editor", "GNOME Text Editor"), ("kate", "Kate (KDE)"), ("xed", "Xed (Mint)")]
+DEFAULT_APPS = {  # sensible defaults per edition; user can override on the Apps page
+    "windows": ("dolphin", "systemsettings", "kate"),
+    "mac": ("nautilus", "gnome-control-center", "gnome-text-editor"),
+    "ubuntu": ("nautilus", "gnome-control-center", "gnome-text-editor"),
+    "fedora": ("nautilus", "gnome-control-center", "gnome-text-editor"),
+    "mint": ("nemo", "cinnamon-settings", "xed"),
+}
+USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+HOST_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
+
+
+def combo(rows, on_change=None):
+    model = Gtk.StringList.new([label for _, label in rows])
+    dd = Gtk.DropDown(model=model)
+    dd.ids = [i for i, _ in rows]
+    if on_change:
+        dd.connect("notify::selected", lambda d, _p: on_change())
+    return dd
+
+
+class Wizard(Adw.ApplicationWindow):
+    def __init__(self, app):
+        super().__init__(application=app, title="Dyverz OS Setup", default_width=760, default_height=560)
+        self.state = {"edition": "windows", "file_manager": "dolphin", "settings_app": "systemsettings",
+                      "text_editor": "kate", "fullname": "", "username": "", "hostname": "dyverz-pc",
+                      "password": "", "autologin": False, "emote_shortcut": "F1", "timezone": self.detect_tz()}
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.SLIDE_LEFT_RIGHT, vexpand=True)
+        tv = Adw.ToolbarView(); hb = Adw.HeaderBar(); tv.add_top_bar(hb)
+        self.back = Gtk.Button(label="Back"); self.back.connect("clicked", lambda *_: self.go(-1)); hb.pack_start(self.back)
+        self.next = Gtk.Button(label="Next", css_classes=["suggested-action"]); self.next.connect("clicked", lambda *_: self.go(+1)); hb.pack_end(self.next)
+        tv.set_content(self.stack); self.set_content(tv)
+        self.pages = [self.page_welcome(), self.page_look(), self.page_apps(), self.page_account(), self.page_summary(), self.page_apply()]
+        for i, p in enumerate(self.pages):
+            self.stack.add_named(p, str(i))
+        self.idx = int(os.environ.get("DYVERZ_PAGE", "0")); self.refresh()   # DYVERZ_PAGE=n: open on page n (screenshots/tests)
+
+    @staticmethod
+    def detect_tz():
+        try:
+            return os.path.relpath(os.path.realpath("/etc/localtime"), "/usr/share/zoneinfo")
+        except Exception:
+            return "UTC"
+
+    # ---------- pages ----------
+    def status(self, title, desc, icon):
+        return Adw.StatusPage(title=title, description=desc, icon_name=icon, vexpand=True)
+
+    def page_welcome(self):
+        p = self.status("Welcome to Dyverz OS", "One system, your choice of look.\nThis setup takes about a minute; the software you picked installs afterwards.", "computer-symbolic")
+        return p
+
+    def page_look(self):
+        box = Adw.PreferencesPage(title="Look")
+        grp = Adw.PreferencesGroup(title="Choose how Dyverz OS should look", description="This picks the desktop environment and theme. You can add the others later from the Dyverz Store.")
+        first = None
+        for eid, name, desc in EDITIONS:
+            row = Adw.ActionRow(title=name, subtitle=desc)
+            chk = Gtk.CheckButton(); chk.set_group(first) if first else None
+            first = first or chk
+            chk.set_active(eid == self.state["edition"])
+            chk.connect("toggled", lambda c, e=eid: self.set_edition(e) if c.get_active() else None)
+            row.add_prefix(chk); row.set_activatable_widget(chk); grp.add(row)
+        box.add(grp); return box
+
+    def set_edition(self, e):
+        self.state["edition"] = e
+        fm, st, ed = DEFAULT_APPS[e]
+        self.dd_fm.set_selected(self.dd_fm.ids.index(fm)); self.dd_st.set_selected(self.dd_st.ids.index(st)); self.dd_ed.set_selected(self.dd_ed.ids.index(ed))
+
+    def page_apps(self):
+        box = Adw.PreferencesPage(title="Apps")
+        grp = Adw.PreferencesGroup(title="Default apps", description="Mix and match: a Windows look with the GNOME file manager is fine.")
+        self.dd_fm = combo(FILE_MANAGERS); self.dd_st = combo(SETTINGS_APPS); self.dd_ed = combo(EDITORS)
+        for title, dd in (("File manager", self.dd_fm), ("Settings app", self.dd_st), ("Text editor", self.dd_ed)):
+            r = Adw.ActionRow(title=title); dd.set_valign(Gtk.Align.CENTER); r.add_suffix(dd); grp.add(r)
+        box.add(grp)
+        g2 = Adw.PreferencesGroup(title="Shortcuts")
+        self.emote = Adw.EntryRow(title="Emote (emoji picker) shortcut", text="F1"); g2.add(self.emote); box.add(g2)
+        self.set_edition(self.state["edition"])
+        return box
+
+    def page_account(self):
+        box = Adw.PreferencesPage(title="Account")
+        grp = Adw.PreferencesGroup(title="Who are you?", description="The first account is the administrator (it can use sudo), like on Ubuntu.")
+        self.fullname = Adw.EntryRow(title="Your name"); self.fullname.connect("changed", self.autofill)
+        self.hostname = Adw.EntryRow(title="Computer name", text="dyverz-pc")
+        self.username = Adw.EntryRow(title="Username")
+        self.password = Adw.PasswordEntryRow(title="Password"); self.confirm = Adw.PasswordEntryRow(title="Confirm password")
+        self.autologin = Adw.SwitchRow(title="Log in automatically", subtitle="Skip the password screen at boot")
+        for w in (self.fullname, self.hostname, self.username, self.password, self.confirm, self.autologin):
+            grp.add(w)
+        self.err = Gtk.Label(css_classes=["error"], xalign=0, wrap=True)
+        box.add(grp); g2 = Adw.PreferencesGroup(); g2.add(self.err); box.add(g2)
+        return box
+
+    def autofill(self, *_):
+        if not self.username.get_text():
+            n = self.fullname.get_text().strip().split(" ")[0].lower()
+            n = re.sub(r"[^a-z0-9_-]", "", n)
+            if n and not self.username.get_text():
+                self.username.set_text(n)
+                self.hostname.set_text(f"{n}-pc")
+
+    def page_summary(self):
+        self.summary = Gtk.Label(xalign=0, wrap=True, css_classes=["monospace"], margin_top=24, margin_start=24, margin_end=24)
+        p = Adw.PreferencesPage(title="Summary"); g = Adw.PreferencesGroup(title="Ready to set up Dyverz OS", description="Press Apply. Packages for your chosen look are installed now; this needs internet.")
+        g.add(self.summary); p.add(g); return p
+
+    def page_apply(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=18, margin_start=18, margin_end=18, margin_bottom=18)
+        self.prog = Gtk.ProgressBar(show_text=True, text="Applying…"); box.append(self.prog)
+        self.log = Gtk.TextView(editable=False, monospace=True, vexpand=True); sw = Gtk.ScrolledWindow(child=self.log, vexpand=True); box.append(sw)
+        self.finish = Gtk.Button(label="Reboot into Dyverz OS", css_classes=["suggested-action"], sensitive=False, halign=Gtk.Align.END)
+        self.finish.connect("clicked", lambda *_: subprocess.Popen(["systemctl", "reboot"])); box.append(self.finish)
+        return box
+
+    # ---------- flow ----------
+    def collect(self):
+        s = self.state
+        s["file_manager"] = self.dd_fm.ids[self.dd_fm.get_selected()]
+        s["settings_app"] = self.dd_st.ids[self.dd_st.get_selected()]
+        s["text_editor"] = self.dd_ed.ids[self.dd_ed.get_selected()]
+        s["emote_shortcut"] = self.emote.get_text().strip() or "F1"
+        s["fullname"] = self.fullname.get_text().strip(); s["username"] = self.username.get_text().strip()
+        s["hostname"] = self.hostname.get_text().strip(); s["password"] = self.password.get_text()
+        s["autologin"] = self.autologin.get_active()
+
+    def validate_account(self):
+        self.collect(); s = self.state
+        if not s["fullname"]: return "Enter your name."
+        if not USER_RE.match(s["username"]): return "Username: lowercase letters, digits, - or _ only."
+        if not HOST_RE.match(s["hostname"]): return "Computer name: letters, digits and hyphens only."
+        if len(s["password"]) < 4: return "Password must be at least 4 characters."
+        if s["password"] != self.confirm.get_text(): return "Passwords do not match."
+        return None
+
+    def go(self, d):
+        if d > 0 and self.idx == 3:
+            e = self.validate_account()
+            if e: self.err.set_text(e); return
+            self.err.set_text("")
+        if d > 0 and self.idx == 4:
+            self.apply(); return
+        self.idx = max(0, min(len(self.pages) - 1, self.idx + d)); self.refresh()
+
+    def refresh(self):
+        self.stack.set_visible_child_name(str(self.idx))
+        self.back.set_visible(0 < self.idx < 5); self.next.set_visible(self.idx < 5)
+        self.next.set_label({4: "Apply"}.get(self.idx, "Next"))
+        if self.idx == 4:
+            self.collect(); s = self.state
+            self.summary.set_text("\n".join([
+                f"Look:          {dict((e, n) for e, n, _ in EDITIONS)[s['edition']]}",
+                f"File manager:  {s['file_manager']}", f"Settings app:  {s['settings_app']}", f"Text editor:   {s['text_editor']}",
+                f"Emote key:     {s['emote_shortcut']}", f"Computer name: {s['hostname']}",
+                f"Admin user:    {s['username']} ({s['fullname']})", f"Auto-login:    {'yes' if s['autologin'] else 'no'}",
+                f"Time zone:     {s['timezone']}"]))
+
+    def apply(self):
+        self.collect(); self.idx = 5; self.refresh(); self.back.set_visible(False); self.next.set_visible(False)
+        threading.Thread(target=self.run_apply, daemon=True).start()
+
+    def append_log(self, line):
+        buf = self.log.get_buffer(); buf.insert(buf.get_end_iter(), line)
+        self.log.scroll_to_mark(buf.get_insert(), 0, False, 0, 0)
+
+    def run_apply(self):
+        data = json.dumps(self.state)
+        cmd = [APPLY, "--stdin"] if os.geteuid() == 0 else ["pkexec", APPLY, "--stdin"]
+        try:
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            p.stdin.write(data); p.stdin.close()
+            for line in p.stdout:
+                GLib.idle_add(self.append_log, line)
+                m = re.match(r"^::\s*step\s+(\d+)/(\d+)", line)
+                if m: GLib.idle_add(self.prog.set_fraction, int(m[1]) / int(m[2]))
+            rc = p.wait()
+        except Exception as ex:
+            rc = 1; GLib.idle_add(self.append_log, f"\nERROR: {ex}\n")
+        def done():
+            self.prog.set_fraction(1.0); self.prog.set_text("Done" if rc == 0 else f"Failed (exit {rc}) — see log")
+            self.finish.set_sensitive(True)
+            if rc != 0: self.finish.set_label("Close"); self.finish.connect("clicked", lambda *_: self.close())
+        GLib.idle_add(done)
+
+
+class App(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id="os.dyverz.Setup")
+    def do_activate(self):
+        Wizard(self).present()
+
+if __name__ == "__main__":
+    sys.exit(App().run(sys.argv))

@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# Dyverz OS: apply the choices made in dyverz-setup. Runs as root.
+#   dyverz-apply --stdin            JSON on stdin
+#   dyverz-apply /path/setup.json
+#   DRY_RUN=1 dyverz-apply ...      print what would happen, change nothing
+set -uo pipefail
+LIB=${DYVERZ_LIB:-/usr/local/lib/dyverz}
+CONF_DIR=/etc/dyverz; STEP=0; TOTAL=12
+say()  { echo ":: $*"; }
+step() { STEP=$((STEP+1)); echo ":: step $STEP/$TOTAL — $*"; }
+run()  { if [[ ${DRY_RUN:-0} = 1 ]]; then echo "   [dry] $*"; else "$@"; fi; }
+[[ $EUID -eq 0 || ${DRY_RUN:-0} = 1 ]] || { echo "run as root"; exit 1; }
+
+# ---- 1. read config
+step "Reading setup"
+if [[ ${1:-} = --stdin ]]; then JSON=$(cat); else JSON=$(cat "${1:-$CONF_DIR/setup.json}"); fi
+j() { python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1],""); print(v if not isinstance(v,bool) else str(v).lower())' "$1" <<<"$JSON"; }
+EDITION=$(j edition); FM=$(j file_manager); ST=$(j settings_app); ED=$(j text_editor)
+FULLNAME=$(j fullname); USERNAME=$(j username); HOSTNAME_=$(j hostname); PASSWORD=$(j password)
+AUTOLOGIN=$(j autologin); EMOTE_KEY=$(j emote_shortcut); TZ_=$(j timezone)
+[[ -n $EDITION && -n $USERNAME && -n $HOSTNAME_ ]] || { echo "incomplete setup json"; exit 2; }
+run mkdir -p $CONF_DIR
+[[ ${DRY_RUN:-0} = 1 ]] || python3 -c 'import json,sys; d=json.load(sys.stdin); d.pop("password",None); json.dump(d,open(sys.argv[1],"w"),indent=2)' $CONF_DIR/setup.json <<<"$JSON"
+source "$LIB/editions/common.sh"; source "$LIB/editions/$EDITION.sh"
+say "edition=$EDITION de=$EDITION_DE fm=$FM settings=$ST editor=$ED user=$USERNAME host=$HOSTNAME_"
+
+# ---- 2. identity
+step "Hostname, time zone, locale"
+run bash -c "echo '$HOSTNAME_' > /etc/hostname"
+run bash -c "printf '127.0.0.1 localhost\n::1 localhost\n127.0.1.1 $HOSTNAME_\n' > /etc/hosts"
+run ln -sf "/usr/share/zoneinfo/${TZ_:-UTC}" /etc/localtime
+grep -q '^en_US.UTF-8' /etc/locale.gen 2>/dev/null || run bash -c "echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen"
+run locale-gen >/dev/null; run bash -c "echo 'LANG=en_US.UTF-8' > /etc/locale.conf"
+
+# ---- 3. Ubuntu-style user system: first user = administrator via wheel/sudo
+step "Creating administrator account $USERNAME"
+run bash -c "getent group docker >/dev/null || groupadd docker"
+if id "$USERNAME" >/dev/null 2>&1; then say "user exists, updating"; run usermod -c "$FULLNAME" -aG wheel,users,docker,video,audio,storage,lp,input "$USERNAME"
+else run useradd -m -c "$FULLNAME" -G wheel,users,docker,video,audio,storage,lp,input -s /bin/bash "$USERNAME"; fi
+[[ ${DRY_RUN:-0} = 1 ]] || chpasswd <<<"$USERNAME:$PASSWORD"
+run install -d -m 750 /etc/sudoers.d
+run bash -c "printf '%%wheel ALL=(ALL:ALL) ALL\nDefaults pwfeedback\n' > /etc/sudoers.d/10-dyverz-admin && chmod 440 /etc/sudoers.d/10-dyverz-admin"
+run bash -c "printf 'polkit.addAdminRule(function(a,s){return [\"unix-group:wheel\"];});\n' > /etc/polkit-1/rules.d/49-dyverz-admin.rules"
+HOME_=$(getent passwd "$USERNAME" | cut -d: -f6); HOME_=${HOME_:-/home/$USERNAME}
+
+# ---- 4. packages
+step "Installing desktop + software stack (this is the slow part)"
+APPS_REPO=""
+case $FM in nautilus) APPS_REPO+=" nautilus";; dolphin) APPS_REPO+=" dolphin";; nemo) APPS_REPO+=" nemo";; esac
+case $ST in gnome-control-center) APPS_REPO+=" gnome-control-center";; systemsettings) APPS_REPO+=" systemsettings";; cinnamon-settings) APPS_REPO+=" cinnamon";; esac
+case $ED in gnome-text-editor) APPS_REPO+=" gnome-text-editor";; kate) APPS_REPO+=" kate";; xed) APPS_REPO+=" xed";; esac
+run pacman -Sy --noconfirm --needed $EDITION_REPO $STACK_REPO $APPS_REPO
+# AUR: build as the new user (makepkg refuses root); temporary passwordless sudo just for the build
+if ! command -v yay >/dev/null; then
+  run bash -c "echo '$USERNAME ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/90-dyverz-build; chmod 440 /etc/sudoers.d/90-dyverz-build"
+  run sudo -u "$USERNAME" bash -c 'cd /tmp && rm -rf yay-bin && git clone -q https://aur.archlinux.org/yay-bin.git && cd yay-bin && makepkg -si --noconfirm'
+fi
+run bash -c "echo '$USERNAME ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/90-dyverz-build; chmod 440 /etc/sudoers.d/90-dyverz-build"
+run sudo -u "$USERNAME" yay -S --noconfirm --needed --answerdiff None --answerclean None $EDITION_AUR $STACK_AUR || say "WARNING: some AUR packages failed (see above); continue"
+run rm -f /etc/sudoers.d/90-dyverz-build
+
+# ---- 5. display manager + autologin
+step "Display manager ($EDITION_DM)"
+for dm in gdm sddm lightdm; do [[ $dm != $EDITION_DM ]] && run systemctl disable $dm.service >/dev/null 2>&1; done
+run systemctl enable "$EDITION_DM.service" >/dev/null
+case $EDITION_DM in
+  gdm)   run mkdir -p /etc/gdm; run bash -c "printf '[daemon]\nAutomaticLoginEnable=%s\nAutomaticLogin=%s\nWaylandEnable=true\n' $AUTOLOGIN $USERNAME > /etc/gdm/custom.conf";;
+  sddm)  run mkdir -p /etc/sddm.conf.d; [[ $AUTOLOGIN = true ]] && run bash -c "printf '[Autologin]\nUser=%s\nSession=plasma\n' $USERNAME > /etc/sddm.conf.d/autologin.conf";;
+  lightdm) run mkdir -p /etc/lightdm/lightdm.conf.d; run bash -c "printf '[Seat:*]\ngreeter-session=lightdm-slick-greeter\n%s\n' \"$([[ $AUTOLOGIN = true ]] && echo autologin-user=$USERNAME)\" > /etc/lightdm/lightdm.conf.d/50-dyverz.conf"; run groupadd -f autologin; run gpasswd -a "$USERNAME" autologin >/dev/null;;
+esac
+
+# ---- 6. default apps (file manager / settings / editor) and the Dyverz "Settings" launcher
+step "Default apps"
+run install -d /etc/xdg /usr/local/share/applications
+declare -A FMD=([nautilus]=org.gnome.Nautilus.desktop [dolphin]=org.kde.dolphin.desktop [nemo]=nemo.desktop)
+declare -A EDD=([gnome-text-editor]=org.gnome.TextEditor.desktop [kate]=org.kde.kate.desktop [xed]=xed.desktop)
+declare -A STD=([gnome-control-center]=org.gnome.Settings.desktop [systemsettings]=systemsettings.desktop [cinnamon-settings]=cinnamon-settings.desktop)
+run bash -c "cat > /etc/xdg/mimeapps.list <<M
+[Default Applications]
+inode/directory=${FMD[$FM]}
+text/plain=${EDD[$ED]}
+application/x-ms-dos-executable=dyverz-run-exe.desktop
+application/x-msi=dyverz-run-exe.desktop
+application/vnd.microsoft.portable-executable=dyverz-run-exe.desktop
+M"
+run bash -c "cat > /usr/local/share/applications/dyverz-settings.desktop <<D
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Dyverz OS settings
+Exec=$ST
+Icon=preferences-system
+Categories=Settings;System;
+D"
+# hide the settings apps that were not chosen so there is one "Settings" in the menu
+for k in "${!STD[@]}"; do [[ $k != $ST ]] && run bash -c "printf '[Desktop Entry]\nType=Application\nName=%s\nNoDisplay=true\nExec=%s\n' $k $k > /usr/local/share/applications/${STD[$k]}"; done
+
+# ---- 7. Emote shortcut (GNOME / Cinnamon via dconf system db, KDE via desktop-file shortcut)
+step "Emote shortcut = $EMOTE_KEY"
+GK=$(python3 -c "k='$EMOTE_KEY';print(k if k.startswith('<') or k.startswith('F') else k)")
+run install -d /etc/dconf/profile /etc/dconf/db/local.d
+run bash -c "printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user"
+run bash -c "cat > /etc/dconf/db/local.d/10-dyverz-emote <<K
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/dyverz-emote/']
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/dyverz-emote]
+name='Emote'
+command='emote'
+binding='$GK'
+[org/cinnamon/desktop/keybindings]
+custom-list=['dyverz-emote']
+[org/cinnamon/desktop/keybindings/custom-keybindings/dyverz-emote]
+name='Emote'
+command='emote'
+binding=['$GK']
+K"
+run dconf update
+run bash -c "cat > /usr/local/share/applications/dyverz-emote.desktop <<E
+[Desktop Entry]
+Type=Application
+Name=Emote
+Exec=emote
+Icon=face-smile
+NoDisplay=true
+X-KDE-Shortcuts=$GK
+E"
+
+# ---- 8. Dyverz Windows kernel (virtual C: partition + Wine) and the .exe installer
+step "Dyverz Win Kernel: virtual C: partition, Wine, .exe installer"
+run install -m755 "$LIB/winkernel/dyverz-winkernel" /usr/local/bin/dyverz-winkernel
+run install -m755 "$LIB/winkernel/dyverz-exe-installer" /usr/local/bin/dyverz-exe-installer
+run install -m755 "$LIB/winkernel/dyverz-run" /usr/local/bin/dyverz-run
+run install -m644 "$LIB/winkernel/dyverz-winkernel.service" /etc/systemd/system/dyverz-winkernel.service
+run install -m644 "$LIB/winkernel/wine.conf" /etc/binfmt.d/dyverz-wine.conf
+run install -m644 "$LIB/winkernel/dyverz-run-exe.desktop" /usr/local/share/applications/dyverz-run-exe.desktop
+run install -m644 "$LIB/winkernel/dyverz-exe-installer.desktop" /usr/local/share/applications/dyverz-exe-installer.desktop
+run systemctl daemon-reload; run systemctl enable dyverz-winkernel.service >/dev/null
+run /usr/local/bin/dyverz-winkernel create 32G
+run /usr/local/bin/dyverz-winkernel start
+run systemctl restart systemd-binfmt.service
+
+# ---- 9. package managers: pacman (native), flatpak+flathub, snapd, apt/dpkg (AUR) + Dyverz Store = Discover
+step "Package managers and Dyverz Store"
+run flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+pacman -Q snapd >/dev/null 2>&1 && { run systemctl enable --now snapd.socket snapd.apparmor.service >/dev/null 2>&1; run ln -sf /var/lib/snapd/snap /snap; }
+run bash -c "cat > /usr/local/share/applications/dyverz-store.desktop <<S
+[Desktop Entry]
+Type=Application
+Name=Dyverz Store
+Comment=Install apps (pacman, Flatpak, Snap) — the Dyverz app store
+Exec=plasma-discover
+Icon=plasma-discover
+Categories=System;PackageManager;
+S"
+run systemctl enable docker.service >/dev/null
+
+# ---- 10. per-user look, applied at first login
+step "Per-user look ($EDITION) for $USERNAME"
+run install -d -o "$USERNAME" -g "$USERNAME" "$HOME_/.config/autostart"
+[[ ${DRY_RUN:-0} = 1 ]] || edition_apply_user "$USERNAME" "$HOME_"
+run bash -c "cat > '$HOME_/.config/autostart/dyverz-look.desktop' <<A
+[Desktop Entry]
+Type=Application
+Name=Dyverz first-login look
+Exec=bash -c 'sleep 8; bash ~/.config/dyverz-look.sh && rm -f ~/.config/autostart/dyverz-look.desktop'
+X-GNOME-Autostart-enabled=true
+A"
+run chown -R "$USERNAME:$USERNAME" "$HOME_/.config"
+run sudo -u "$USERNAME" /usr/local/bin/dyverz-winkernel init-user
+
+# ---- 11. drivers + updates
+step "Driver Manager scan/install and Update Manager"
+run bash "$LIB/drivers/install.sh" /
+run bash "$LIB/updates/install.sh" /
+run pacman -S --noconfirm --needed pacman-contrib pciutils usbutils vulkan-tools >/dev/null
+run systemctl daemon-reload
+run /usr/local/bin/dyverz-drivers install --yes
+
+# ---- 12. finish
+step "Finishing"
+run touch $CONF_DIR/setup-done
+run systemctl disable dyverz-firstboot.service >/dev/null 2>&1
+id dyverz-oobe >/dev/null 2>&1 && run userdel -r dyverz-oobe
+say "Dyverz OS setup complete — reboot to log in as $USERNAME"

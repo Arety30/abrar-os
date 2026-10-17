@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Dyverz OS initial setup — text-mode fallback (works on a tty / live ISO / over SSH).
+set -euo pipefail
+W=whiptail; command -v $W >/dev/null || W=dialog
+T="Dyverz OS Setup"
+edition=$($W --title "$T" --menu "Choose how Dyverz OS should look" 18 70 5 \
+  windows "Windows look  (KDE Plasma, Fluent icons)" \
+  mac     "macOS look    (GNOME, WhiteSur, dock)" \
+  ubuntu  "Ubuntu look   (GNOME, Yaru)" \
+  fedora  "Fedora look   (GNOME, Adwaita)" \
+  mint    "Linux Mint look (Cinnamon, Mint-Y)" 3>&1 1>&2 2>&3)
+case $edition in windows) d=(dolphin systemsettings kate);; mint) d=(nemo cinnamon-settings xed);; *) d=(nautilus gnome-control-center gnome-text-editor);; esac
+fm=$($W --title "$T" --default-item "${d[0]}" --menu "File manager" 12 60 3 nautilus "Files (GNOME/macOS style)" dolphin "Dolphin (KDE/Windows style)" nemo "Nemo (Mint style)" 3>&1 1>&2 2>&3)
+st=$($W --title "$T" --default-item "${d[1]}" --menu "Settings app" 12 60 3 gnome-control-center "GNOME Settings" systemsettings "KDE System Settings" cinnamon-settings "Cinnamon Settings" 3>&1 1>&2 2>&3)
+ed=$($W --title "$T" --default-item "${d[2]}" --menu "Text editor" 12 60 3 gnome-text-editor "GNOME Text Editor" kate "Kate" xed "Xed" 3>&1 1>&2 2>&3)
+fullname=$($W --title "$T" --inputbox "Your name" 8 60 3>&1 1>&2 2>&3)
+guess=$(echo "$fullname" | awk '{print tolower($1)}' | tr -cd 'a-z0-9_-')
+username=$($W --title "$T" --inputbox "Username (administrator, can use sudo)" 8 60 "$guess" 3>&1 1>&2 2>&3)
+hostname=$($W --title "$T" --inputbox "Computer name" 8 60 "${guess:-dyverz}-pc" 3>&1 1>&2 2>&3)
+while :; do
+  p1=$($W --title "$T" --passwordbox "Password" 8 60 3>&1 1>&2 2>&3); p2=$($W --title "$T" --passwordbox "Confirm password" 8 60 3>&1 1>&2 2>&3)
+  [[ "$p1" == "$p2" && ${#p1} -ge 4 ]] && break; $W --title "$T" --msgbox "Passwords differ or are shorter than 4 characters." 8 60
+done
+autologin=false; $W --title "$T" --yesno "Log in automatically at boot?" 8 60 && autologin=true
+emote=$($W --title "$T" --inputbox "Shortcut for Emote (emoji picker)" 8 60 "F1" 3>&1 1>&2 2>&3)
+tz=$(realpath /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##'); tz=${tz:-UTC}
+json=$(python3 - "$edition" "$fm" "$st" "$ed" "$fullname" "$username" "$hostname" "$p1" "$autologin" "$emote" "$tz" <<'PY'
+import json,sys
+a=sys.argv[1:]
+print(json.dumps({"edition":a[0],"file_manager":a[1],"settings_app":a[2],"text_editor":a[3],"fullname":a[4],"username":a[5],"hostname":a[6],"password":a[7],"autologin":a[8]=="true","emote_shortcut":a[9],"timezone":a[10]}))
+PY
+)
+$W --title "$T" --yesno "Apply now?\n\nLook: $edition   Apps: $fm / $st / $ed\nUser: $username ($fullname) on $hostname\nAuto-login: $autologin   Emote: $emote" 14 70 || exit 1
+if [[ $EUID -eq 0 ]]; then printf '%s' "$json" | /usr/local/bin/dyverz-apply --stdin
+else printf '%s' "$json" | sudo /usr/local/bin/dyverz-apply --stdin; fi

@@ -1,0 +1,9 @@
+NAME="Dyverz OS"
+PRETTY_NAME="Dyverz OS"
+ID=dyverz
+ID_LIKE=arch
+VERSION_ID=1.0
+BUILD_ID=rolling
+ANSI_COLOR="38;2;124;77;255"
+HOME_URL="https://example.com/"
+LOGO=dyverz

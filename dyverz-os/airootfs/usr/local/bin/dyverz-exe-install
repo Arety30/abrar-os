@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Dyverz EXE installer: runs any .exe / .msi installer inside the WinKernel partition and
+# publishes the app to the menu.   usage: dyverz-exe-install <file.exe|file.msi|URL> [--game] [--silent]
+set -uo pipefail
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-cdrive} WINEDEBUG=-all
+SRC=${1:-}; shift || true; GAME=0; SILENT=0
+for a in "$@"; do case $a in --game) GAME=1;; --silent) SILENT=1;; esac; done
+notify() { command -v notify-send >/dev/null && notify-send -i /usr/share/pixmaps/dyverz.png "Dyverz Installer" "$1" || echo "$1"; }
+[ -n "$SRC" ] || { echo "usage: dyverz-exe-install <file.exe|file.msi|URL> [--game] [--silent]"; exit 1; }
+mountpoint -q /mnt/cdrive || sudo -n winkernel boot
+[ -d "$WINEPREFIX" ] || winkernel init
+[ $GAME = 1 ] && [ ! -f "$WINEPREFIX/.dyverz-dxvk" ] && winkernel init --games
+INST=/mnt/cdrive/Dyverz/Installers; mkdir -p "$INST"
+case "$SRC" in http://*|https://*) f="$INST/$(basename "${SRC%%\?*}")"; notify "Downloading $(basename "$f")…"; curl -L --fail -o "$f" "$SRC" || { notify "download failed"; exit 1; }; SRC=$f;; esac
+[ -f "$SRC" ] || { notify "not found: $SRC"; exit 1; }
+cp -n "$SRC" "$INST/" 2>/dev/null; F="$INST/$(basename "$SRC")"
+before=$(mktemp); find "/mnt/cdrive/ProgramData/Microsoft/Windows/Start Menu" "/mnt/cdrive/users/$USER" -name '*.lnk' 2>/dev/null | sort > "$before"
+notify "Installing $(basename "$F") on WinKernel C:\\"
+export WINEDLLOVERRIDES="winemenubuilder.exe="     # let Wine create .desktop entries for installed apps
+case "${F,,}" in
+  *.msi) [ $SILENT = 1 ] && wine msiexec /i "$F" /qn || wine msiexec /i "$F";;
+  *)     [ $SILENT = 1 ] && wine start /wait /unix "$F" /S /VERYSILENT /NORESTART || wine start /wait /unix "$F";;
+esac; rc=$?
+wineserver -w
+after=$(mktemp); find "/mnt/cdrive/ProgramData/Microsoft/Windows/Start Menu" "/mnt/cdrive/users/$USER" -name '*.lnk' 2>/dev/null | sort > "$after"
+new=$(comm -13 "$before" "$after" | grep -vi uninstall | head -5)
+[ $GAME = 1 ] && for l in $new; do d="$HOME/.local/share/applications/wine/$(basename "${l%.lnk}").desktop"; [ -f "$d" ] && sed -i 's|^Exec=|Exec=gamemoderun |' "$d"; done
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+[ $rc = 0 ] && notify "Installed. New shortcuts: $(echo "$new" | xargs -n1 basename 2>/dev/null | sed 's/.lnk//' | tr '\n' ' ')" || notify "Installer exited with code $rc"
+rm -f "$before" "$after"; exit $rc

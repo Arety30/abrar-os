@@ -1,0 +1,4 @@
+# Dyverz helpers users may run without a password (each is restricted to safe, self-scoped actions)
+ALL ALL=(root) NOPASSWD: /usr/local/bin/dyverz-session, /usr/local/bin/winkernel boot, /usr/local/bin/winkernel halt
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/dyverz-boot, /usr/local/bin/winkernel
+%sudo ALL=(ALL:ALL) ALL

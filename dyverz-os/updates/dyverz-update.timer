@@ -1,0 +1,8 @@
+# user timer: checks for updates 3 min after login and every 6 h, then asks (unless policy = manual)
+[Unit]
+Description=Dyverz Update check
+[Timer]
+OnStartupSec=3min
+OnUnitActiveSec=6h
+[Install]
+WantedBy=timers.target

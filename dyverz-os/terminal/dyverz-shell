@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# dyverz-shell <profile>  — launches one Dyverz Terminal profile.
+# Profiles: arch ubuntu kali python winecmd pwsh.  Containers are created lazily with distrobox.
+set -uo pipefail
+p=${1:-arch}; shift || true
+# Debian-family images: systemd's postinst runs systemd-tmpfiles, which cannot chown the host-shared /tmp
+# inside a rootless container and aborts apt (exit 73). Mask those rules before distrobox's package init runs.
+# (no shell variables in the hook: distrobox evals it under set -u)
+DEB_HOOK='mkdir -p /run/systemd/journal /etc/tmpfiles.d; ln -sf /dev/null /etc/tmpfiles.d/tmp.conf; ln -sf /dev/null /etc/tmpfiles.d/x11.conf; ln -sf /dev/null /etc/tmpfiles.d/legacy.conf'
+box() {  # box <name> <image> [args passed to bash -l]
+  local name=$1 image=$2; shift 2
+  if ! distrobox list 2>/dev/null | awk -F'|' 'NR>1{gsub(/ /,"",$2);print $2}' | grep -qx "$name"; then
+    echo -e "\e[1;36m[dyverz]\e[0m first run: creating the $name container from $image (one-time download)…"
+    distrobox create --yes --name "$name" --image "$image" --pull --pre-init-hooks "$DEB_HOOK" || { echo "container creation failed"; exec bash; }
+  fi
+  exec distrobox enter "$name" -- bash -l "$@"
+}
+case $p in
+  arch)    exec "${SHELL:-/bin/bash}" -l "$@" ;;
+  ubuntu)  box dyverz-ubuntu docker.io/library/ubuntu:24.04 "$@" ;;
+  kali)    box dyverz-kali   docker.io/kalilinux/kali-rolling "$@" ;;
+  python)  command -v ipython >/dev/null && exec ipython "$@" || exec python3 -q "$@" ;;
+  winecmd) export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-dyverz}; export WINEDEBUG=-all
+           if [ ! -e "$WINEPREFIX/drive_c/windows" ]; then echo "[dyverz] preparing Wine C: drive…"
+             if command -v dyverz-winkernel >/dev/null; then dyverz-winkernel init-user; else wineboot -i >/dev/null 2>&1; fi; fi
+           cd "$WINEPREFIX/drive_c" 2>/dev/null || true; exec wine cmd "$@" ;;
+  pwsh)    for b in pwsh-preview pwsh; do command -v $b >/dev/null && exec $b -NoLogo "$@"; done
+           echo "PowerShell not installed (pacman -S powershell-preview-bin)"; exec bash ;;
+  *)       exec "$p" "$@" ;;
+esac

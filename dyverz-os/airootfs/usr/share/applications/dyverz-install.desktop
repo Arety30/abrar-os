@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install Dyverz OS
+Comment=Install this live system to your computer
+Exec=sh -c 'x-terminal-emulator -e sudo dyverz-install 2>/dev/null || konsole -e sudo dyverz-install 2>/dev/null || gnome-terminal -- sudo dyverz-install 2>/dev/null || kgx -e sudo dyverz-install'
+Icon=dyverz
+Terminal=false
+Categories=System;

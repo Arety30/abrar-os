@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Command Prompt
+Comment=Windows cmd on the Dyverz WinKernel C: drive
+Exec=wincmd
+Icon=utilities-terminal
+Terminal=true
+Categories=System;Utility;

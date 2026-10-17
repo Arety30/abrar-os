@@ -1,0 +1,12 @@
+[Unit]
+Description=Dyverz: sub-UID/GID ranges for rootless podman (distrobox tabs in Dyverz Terminal)
+DefaultDependencies=no
+After=local-fs.target systemd-sysusers.service
+Before=display-manager.service multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/dyverz-subids
+
+[Install]
+WantedBy=multi-user.target

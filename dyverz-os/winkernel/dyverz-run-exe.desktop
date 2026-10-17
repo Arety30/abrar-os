@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz Win Kernel
+Comment=Run Windows programs
+Exec=/usr/local/bin/dyverz-run %f
+Icon=wine
+NoDisplay=true
+MimeType=application/x-ms-dos-executable;application/x-msi;application/vnd.microsoft.portable-executable;

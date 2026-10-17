@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Dyverz OS Setup
+Comment=Choose your look, apps and account
+Exec=/usr/local/bin/dyverz-setup
+Icon=preferences-desktop-theme
+Categories=System;Settings;
+X-GNOME-Autostart-enabled=true

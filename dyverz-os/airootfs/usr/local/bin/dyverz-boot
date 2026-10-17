@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Boot/login screen customisation (root).  dyverz-boot logo <png> | title <text> | background <png> | login-logo <png> | text <title> [subtitle]
+set -euo pipefail; [ "$(id -u)" = 0 ] || exec sudo -n "$0" "$@"
+T=/usr/share/plymouth/themes/dyverz
+ensure_theme() { [ -d $T ] || { cp -r /usr/share/plymouth/themes/spinner $T; mv $T/spinner.plymouth $T/dyverz.plymouth; sed -i 's/^Name=.*/Name=Dyverz OS/; s/spinner/dyverz/g' $T/dyverz.plymouth; }; }
+rebuild() { plymouth-set-default-theme -R dyverz >/dev/null 2>&1 || mkinitcpio -P >/dev/null 2>&1 || true; }
+case ${1:-} in
+  logo)       ensure_theme; magick "$2" -resize 300x300 $T/watermark.png; cp $T/watermark.png $T/bgrt-fallback.png 2>/dev/null || true; rebuild; echo "boot logo set";;
+  text)       ensure_theme; sed -i "/^Title=/d; /^SubTitle=/d" $T/dyverz.plymouth; sed -i "/^\[two-step\]/a Title=$2\nSubTitle=${3:-}" $T/dyverz.plymouth; rebuild; echo "boot text set";;
+  title)      [ -f /etc/default/grub ] && { sed -i "s/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR=\"$2\"/" /etc/default/grub; grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true; }
+              for e in /boot/loader/entries/*.conf; do [ -f "$e" ] && sed -i "s/^title .*/title $2/" "$e"; done 2>/dev/null || true; echo "boot title set";;
+  background) [ -f /etc/default/grub ] || { echo "no GRUB on this system"; exit 1; }; mkdir -p /boot/grub; magick "$2" -resize 1920x1080 /boot/grub/dyverz-bg.png; grep -q ^GRUB_BACKGROUND /etc/default/grub && sed -i 's|^GRUB_BACKGROUND=.*|GRUB_BACKGROUND="/boot/grub/dyverz-bg.png"|' /etc/default/grub || echo 'GRUB_BACKGROUND="/boot/grub/dyverz-bg.png"' >> /etc/default/grub; grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1; echo "boot background set";;
+  login-logo) mkdir -p /etc/dconf/db/gdm.d /usr/share/dyverz; magick "$2" -resize 256x256 /usr/share/dyverz/login-logo.png; printf '[org/gnome/login-screen]\nlogo='"'"'/usr/share/dyverz/login-logo.png'"'"'\n' > /etc/dconf/db/gdm.d/01-dyverz-logo; dconf update; echo "login logo set";;
+  init)       ensure_theme; plymouth-set-default-theme dyverz >/dev/null 2>&1 || true; grep -q plymouth /etc/mkinitcpio.conf || sed -i 's/^HOOKS=(\(.*\)udev/HOOKS=(\1udev plymouth/' /etc/mkinitcpio.conf; rebuild;;
+  *) echo "usage: dyverz-boot logo PNG | text TITLE [SUB] | title TEXT | background PNG | login-logo PNG | init"; exit 1;;
+esac

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# root half of the first-boot wizard: creates the user, sets hostname, session + look, disables autologin, reboots.
+set -euo pipefail; J=$1; [ "$(id -u)" = 0 ] || exit 1
+g() { echo "$J" | jq -r ".$1 // empty"; }
+u=$(g username); full=$(g fullname); pw=$(g password); host=$(g hostname); look=$(g look); files=$(g files); settings=$(g settings); editor=$(g editor)
+. /usr/share/dyverz/looks/common.sh
+id "$u" >/dev/null 2>&1 || /usr/local/bin/dyverz-adduser adduser "$u" --admin --fullname "$full" --password "$pw"
+echo "$host" > /etc/hostname; hostnamectl set-hostname "$host" 2>/dev/null || true
+printf '127.0.0.1 localhost\n::1 localhost\n127.0.1.1 %s\n' "$host" > /etc/hosts
+sess=$(look_session "$look"); SUDO_USER=$u /usr/local/bin/dyverz-session "$sess"
+c=/home/$u/.config/dyverz; mkdir -p "$c"; printf 'look=%s\nfiles=%s\nsettings=%s\neditor=%s\npending=1\nshortcut=F1=emote\n' "$look" "$files" "$settings" "$editor" > "$c/look.conf"; touch "$c/first-login"; chown -R "$u:$u" "/home/$u/.config"
+# GDM: no more autologin into the wizard; land on the login screen with the user's session preselected
+cat > /etc/gdm/custom.conf <<EOG
+[daemon]
+AutomaticLoginEnable=False
+DefaultSession=$sess.desktop
+WaylandEnable=true
+EOG
+/usr/local/bin/dyverz-boot init >/dev/null 2>&1 || true
+touch /etc/dyverz/setup-done; systemctl disable dyverz-firstboot.service >/dev/null 2>&1 || true
+sync; (sleep 2; systemctl reboot) & exit 0

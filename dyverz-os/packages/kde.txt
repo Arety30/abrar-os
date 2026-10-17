@@ -1,0 +1,4 @@
+# KDE Plasma session (used by looks: windows, kde)
+plasma-desktop plasma-workspace plasma-nm plasma-pa kscreen powerdevil bluedevil breeze breeze-gtk
+kde-gtk-config kdeplasma-addons plasma-systemmonitor plasma-browser-integration
+dolphin konsole kate ark gwenview spectacle systemsettings kinfocenter kwalletmanager

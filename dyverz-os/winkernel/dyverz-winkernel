@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Dyverz Win Kernel — a virtual "C:" partition (real GPT disk image with one NTFS partition,
+# attached through a loop device) shared by Wine, PowerShell and games.
+#   dyverz-winkernel create [SIZE]   make /var/lib/dyverz/cdrive.img (sparse) — default 32G
+#   dyverz-winkernel start|stop      attach + mount at /mnt/cdrive (systemd service calls this)
+#   dyverz-winkernel status
+#   dyverz-winkernel init-user       (as a normal user) create ~/.wine-dyverz prefix whose C:\ is /mnt/cdrive
+set -euo pipefail
+IMG=/var/lib/dyverz/cdrive.img; MNT=/mnt/cdrive; RUN=/run/dyverz/winkernel
+VERSION="Dyverz Win Kernel 11.0 (NT 10.0 build 26100 compatible) — wine $(wine --version 2>/dev/null | sed 's/wine-//')"
+need_root() { [[ $EUID -eq 0 ]] || { echo "needs root"; exit 1; }; }
+loopdev() { losetup -j "$IMG" | cut -d: -f1 | head -1; }
+case ${1:-status} in
+  create)
+    need_root; SIZE=${2:-32G}
+    [[ -e $IMG ]] && { echo "exists: $IMG"; exit 0; }
+    mkdir -p "$(dirname "$IMG")"; truncate -s "$SIZE" "$IMG"
+    sfdisk -q "$IMG" <<<'label: gpt
+type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7, name="Dyverz C"'
+    LD=$(losetup -fP --show "$IMG"); sleep 1
+    if command -v mkfs.ntfs >/dev/null; then mkfs.ntfs -Q -L "Dyverz C" "${LD}p1" >/dev/null; else mkfs.ext4 -q -L "Dyverz C" "${LD}p1"; fi
+    losetup -d "$LD"; echo "created $IMG ($SIZE, sparse)";;
+  start)
+    need_root; mkdir -p "$MNT" "$RUN"
+    mountpoint -q "$MNT" && { echo "already mounted"; exit 0; }
+    LD=$(loopdev); [[ -n $LD ]] || LD=$(losetup -fP --show "$IMG"); sleep 0.5
+    FS=$(blkid -o value -s TYPE "${LD}p1")
+    if [[ $FS = ntfs ]]; then
+      if modprobe ntfs3 2>/dev/null; then mount -t ntfs3 -o uid=0,gid=users,umask=002,windows_names "${LD}p1" "$MNT"
+      else mount -t ntfs-3g -o uid=0,gid=users,umask=002,windows_names "${LD}p1" "$MNT"; fi
+    else mount "${LD}p1" "$MNT"; chgrp users "$MNT"; chmod 2775 "$MNT"; setfacl -d -m g:users:rwx "$MNT" 2>/dev/null || true; fi
+    for d in windows users "Program Files" "Program Files (x86)" ProgramData Games Temp; do mkdir -p "$MNT/$d"; done   # lowercase windows/users = what Wine expects
+    [[ $FS = ntfs ]] || { chgrp -R users "$MNT" 2>/dev/null; chmod -R g+rwX "$MNT" 2>/dev/null; }
+    printf '%s\n' "$VERSION" > "$RUN/version"; echo "$LD" > "$RUN/device"; echo "$FS" > "$RUN/fstype"
+    echo "Dyverz Win Kernel up: ${LD}p1 ($FS) on $MNT";;
+  stop)
+    need_root; mountpoint -q "$MNT" && umount "$MNT"; LD=$(loopdev); [[ -n $LD ]] && losetup -d "$LD"; rm -rf "$RUN"; echo stopped;;
+  status)
+    if [[ -f $RUN/version ]]; then cat "$RUN/version"; echo "device: $(cat $RUN/device)p1 ($(cat $RUN/fstype)) mounted on $MNT"; df -h "$MNT" | tail -1
+    else echo "Dyverz Win Kernel: not running"; fi;;
+  init-user)
+    [[ $EUID -ne 0 ]] || { echo "run as the normal user"; exit 1; }
+    P=$HOME/.wine-dyverz; export WINEPREFIX=$P WINEDEBUG=-all
+    mkdir -p "$P"
+    if [[ -d $P/drive_c && ! -L $P/drive_c ]]; then     # stray real prefix (e.g. a plain wineboot): merge it into the image
+      echo "merging existing $P/drive_c into $MNT"; cp -rn "$P/drive_c/." "$MNT/" && rm -rf "$P/drive_c" || { echo "could not merge $P/drive_c into $MNT"; exit 1; }
+    fi
+    [[ -L $P/drive_c ]] || ln -s "$MNT" "$P/drive_c"     # Wine's C:\ IS the virtual partition
+    [[ $(readlink -f "$P/drive_c") = $MNT ]] || { echo "$P/drive_c does not point at $MNT"; exit 1; }
+    [[ -d $MNT/windows/system32 ]] || wineboot -u >/dev/null 2>&1 || true  # populate C:\windows once (shared by all users)
+    mkdir -p "$MNT/users/$USER" "$HOME/.local/share/applications" 2>/dev/null || { echo "cannot write to $MNT — is $USER in group 'users'? (sudo gpasswd -a $USER users, then log out and in)"; exit 1; }
+    echo "Wine prefix $P ready — C:\\ = $MNT";;
+  *) echo "usage: dyverz-winkernel create|start|stop|status|init-user"; exit 1;;
+esac

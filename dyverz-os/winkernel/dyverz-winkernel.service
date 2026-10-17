@@ -1,0 +1,13 @@
+[Unit]
+Description=Dyverz Win Kernel (virtual C: partition for Wine, PowerShell and games)
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=systemd-binfmt.service display-manager.service
+ConditionPathExists=/var/lib/dyverz/cdrive.img
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/dyverz-winkernel start
+ExecStop=/usr/local/bin/dyverz-winkernel stop
+[Install]
+WantedBy=sysinit.target

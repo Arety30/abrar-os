@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Dyverz WinKernel — a virtual "Windows kernel": a loop-mounted disk image (the C: partition)
+# shared by Wine, PowerShell and Command Prompt, plus DirectX layers (DXVK/VKD3D) for games.
+#   winkernel boot|halt|status|init [--games]|grow <size>|log
+set -euo pipefail
+MNT=/mnt/cdrive; DEV=/dev/winkernel; SIZE=${WINKERNEL_SIZE:-32G}
+IMG=/var/lib/winkernel/winkernel.img; [ -f /etc/dyverz/winkernel.conf ] && . /etc/dyverz/winkernel.conf   # IMG=... overrides
+[ -f "$IMG" ] || [ ! -f /var/lib/dyverz/cdrive.img ] || IMG=/var/lib/dyverz/cdrive.img                    # adopt a pre-existing C: image
+KVER="10.0.26100"; NAME="Dyverz WinKernel"
+PREFIX=${WINEPREFIX:-$HOME/.wine-cdrive}
+need_root() { [ "$(id -u)" = 0 ] || exec sudo -n "$0" "$@"; }
+banner() { echo "$NAME $KVER (NT 11 compatible) — image $IMG on ${1:-not mounted}"; }
+
+cmd_boot() { need_root boot
+  if [ ! -f "$IMG" ]; then echo "[winkernel] creating $SIZE sparse partition image"; truncate -s "$SIZE" "$IMG"; mkfs.ext4 -q -L WINKERNEL "$IMG"; fi
+  mkdir -p "$MNT"
+  if mountpoint -q "$MNT"; then ln -sfn "$(findmnt -no SOURCE "$MNT")" "$DEV"
+  else
+    lo=$(losetup -j "$IMG" | cut -d: -f1 | head -1); [ -n "$lo" ] || lo=$(losetup -P --find --show "$IMG"); sleep 0.5
+    part=$lo; [ -b "${lo}p1" ] && part="${lo}p1"; ln -sfn "$part" "$DEV"
+    mount -o noatime "$part" "$MNT"; chmod 1777 "$MNT"
+    for d in "Program Files" "Program Files (x86)" ProgramData users windows Dyverz/Installers Games; do mkdir -p "$MNT/$d"; done; chmod -R a+rwX "$MNT/Dyverz" "$MNT/users" "$MNT/Games"
+  fi
+  echo "[winkernel] booted: $(readlink -f $DEV) -> $MNT"; }
+cmd_halt() { need_root halt; mountpoint -q "$MNT" && umount "$MNT"; lo=$(readlink -f "$DEV" 2>/dev/null || true); lo=${lo%p1}; [ -n "$lo" ] && losetup -d "$lo" 2>/dev/null || true; rm -f "$DEV"; echo "[winkernel] halted"; }
+cmd_status() {
+  if mountpoint -q "$MNT"; then banner "$(readlink -f $DEV)"; df -h "$MNT" | tail -1 | awk '{print "  C: partition  size "$2"  used "$3"  free "$4}'
+  else banner; echo "  state: HALTED (run: winkernel boot)"; fi
+  echo "  wine      $(wine --version 2>/dev/null || echo missing)"
+  echo "  prefix    $PREFIX $( [ -d "$PREFIX" ] && echo "(ready, C: -> $(readlink -f "$PREFIX/drive_c"))" || echo "(not initialised — winkernel init)")"
+  for drv in dxvk vkd3d mono gecko; do [ -f "$PREFIX/.dyverz-$drv" ] && echo "  driver    $drv loaded" || true; done
+  echo "  services  $(systemctl is-active winkernel.service 2>/dev/null)"; }
+cmd_init() { # per-user Wine prefix whose C:\ IS the shared partition
+  mountpoint -q "$MNT" || sudo -n "$0" boot
+  export WINEPREFIX="$PREFIX" WINEDEBUG=-all WINEDLLOVERRIDES="winemenubuilder.exe=d"
+  if [ ! -d "$PREFIX" ]; then
+    echo "[winkernel] initialising prefix $PREFIX (win11)"; wineboot -u >/dev/null 2>&1 || true; wineserver -w
+    # move the fresh C: skeleton onto the partition, then point drive_c at it
+    cp -an "$PREFIX/drive_c/." "$MNT/" 2>/dev/null || true; rm -rf "$PREFIX/drive_c"; ln -s "$MNT" "$PREFIX/drive_c"
+    mkdir -p "$MNT/users/$USER"; wine reg add 'HKCU\Software\Wine' /v Version /t REG_SZ /d win11 /f >/dev/null 2>&1 || true
+    wine reg add 'HKLM\Software\Microsoft\Windows NT\CurrentVersion' /v ProductName /t REG_SZ /d "Dyverz OS (WinKernel $KVER)" /f >/dev/null 2>&1 || true
+    wine reg add 'HKLM\Software\Microsoft\Windows NT\CurrentVersion' /v CurrentBuild /t REG_SZ /d "${KVER##*.}" /f >/dev/null 2>&1 || true
+    winetricks -q win11 >/dev/null 2>&1 || true; touch "$PREFIX/.dyverz-mono" "$PREFIX/.dyverz-gecko"
+  fi
+  if [ "${1:-}" = "--games" ]; then echo "[winkernel] loading DirectX drivers (dxvk, vkd3d) — downloads once"; winetricks -q dxvk vkd3d >/dev/null 2>&1 && touch "$PREFIX/.dyverz-dxvk" "$PREFIX/.dyverz-vkd3d" || echo "!! dxvk/vkd3d install failed (needs internet)"; fi
+  echo "[winkernel] prefix ready: C:\\ = $MNT"; }
+cmd_grow() { need_root grow "$@"; truncate -s "$1" "$IMG"; lo=$(readlink -f "$DEV"); losetup -c "$lo"; resize2fs "$lo" >/dev/null; echo "[winkernel] grown to $1"; }
+cmd_log() { journalctl -u winkernel.service --no-pager -n 50; }
+case "${1:-status}" in boot) cmd_boot;; halt) cmd_halt;; status) cmd_status;; init) shift; cmd_init "$@";; grow) shift; cmd_grow "$@";; log) cmd_log;; *) echo "usage: winkernel boot|halt|status|init [--games]|grow SIZE|log"; exit 1;; esac

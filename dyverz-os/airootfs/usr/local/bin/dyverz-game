@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Run a Windows game .exe on the WinKernel with DXVK/VKD3D + gamemode:  dyverz-game "C:\Games\x\game.exe"
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-cdrive} WINEDEBUG=-all DXVK_HUD=${DXVK_HUD:-0} WINEESYNC=1 WINEFSYNC=1
+[ -f "$WINEPREFIX/.dyverz-dxvk" ] || winkernel init --games
+exec gamemoderun wine start /wait /unix "$(winepath -u "$1" 2>/dev/null || echo "$1")" "${@:2}"

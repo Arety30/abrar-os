@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Dyverz Setup
+Comment=First-boot setup wizard
+Exec=cage -s -- /usr/local/bin/dyverz-setup
+Type=Application
+DesktopNames=DyverzSetup

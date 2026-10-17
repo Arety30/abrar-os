@@ -1,0 +1,12 @@
+[Unit]
+Description=Dyverz WinKernel (virtual Windows kernel + C: partition)
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/winkernel boot
+ExecStop=/usr/local/bin/winkernel halt
+[Install]
+WantedBy=multi-user.target

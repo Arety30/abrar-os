@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Run a Windows program (.exe/.msi) inside the Dyverz Win Kernel (Wine prefix ~/.wine-dyverz, C:\ = /mnt/cdrive)
+set -u
+export WINEPREFIX=${WINEPREFIX:-$HOME/.wine-dyverz} WINEDEBUG=${WINEDEBUG:--all}
+[[ -d $WINEPREFIX ]] || /usr/local/bin/dyverz-winkernel init-user >/dev/null
+f=${1:-}; [[ -n $f ]] || { echo "usage: dyverz-run program.exe|.msi [args]"; exit 1; }; shift
+case "${f,,}" in *.msi) exec wine msiexec /i "$f" "$@";; *) exec wine "$f" "$@";; esac

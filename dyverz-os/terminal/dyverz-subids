@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Give every human user (UID >= 1000) a 65536-wide sub-UID/GID range if missing. Idempotent.
+touch /etc/subuid /etc/subgid
+while IFS=: read -r name _ uid _; do
+  [[ $uid -ge 1000 && $uid -lt 65534 ]] || continue
+  grep -q "^$name:" /etc/subuid && grep -q "^$name:" /etc/subgid && continue
+  usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "$name" 2>/dev/null \
+    || { echo "$name:100000:65536" >> /etc/subuid; echo "$name:100000:65536" >> /etc/subgid; }
+done < /etc/passwd

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Device Manager
+Comment=Scan hardware and install drivers (Linux + Dyverz Win Kernel)
+Exec=/usr/local/bin/dyverz-device-manager
+Icon=preferences-desktop-peripherals
+Categories=System;Settings;HardwareSettings;

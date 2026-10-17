@@ -1,0 +1,7 @@
+// Administrators (wheel) may run the Dyverz update / driver installers via pkexec after entering their password
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.policykit.exec" && subject.isInGroup("wheel")) {
+    var p = action.lookup("program");
+    if (p == "/usr/local/bin/dyverz-update" || p == "/usr/local/bin/dyverz-drivers" || p == "/usr/local/bin/dyverz-apply") return polkit.Result.AUTH_ADMIN_KEEP;
+  }
+});

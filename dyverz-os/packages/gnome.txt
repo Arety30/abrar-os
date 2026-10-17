@@ -1,0 +1,4 @@
+# GNOME session (used by looks: mac, ubuntu, fedora, gnome)
+gnome-shell gnome-session gnome-settings-daemon gnome-shell-extensions gnome-shell-extension-appindicator
+nautilus gnome-console gnome-system-monitor gnome-backgrounds gnome-keyring gnome-disk-utility
+loupe papers showtime gnome-calculator gnome-characters gvfs gvfs-mtp gvfs-smb sushi tecla

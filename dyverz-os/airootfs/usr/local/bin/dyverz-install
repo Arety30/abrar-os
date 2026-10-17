@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Dyverz OS installer (live ISO): copies the live system to a disk, installs GRUB (UEFI+BIOS), arms the first-boot wizard.
+set -euo pipefail; [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+export NEWT_COLORS='root=,blue'
+disks=$(lsblk -dpno NAME,SIZE,MODEL -e 7,11 | awk '{printf "%s \"%s %s\" ", $1, $2, substr($0, index($0,$3))}')
+DISK=$(eval dialog --stdout --title '"Dyverz OS installer"' --menu '"Install to which disk?  (it will be ERASED)"' 15 70 6 $disks) || exit 1
+dialog --title "Last chance" --yesno "ALL DATA ON $DISK WILL BE DESTROYED.\n\nInstall Dyverz OS to $DISK?" 9 60 || exit 1
+FS=$(dialog --stdout --title "Root filesystem" --menu "Filesystem for /" 10 40 2 ext4 "ext4 (default)" btrfs "btrfs") || FS=ext4
+clear; echo "== partitioning $DISK"
+umount -R /mnt 2>/dev/null || true; wipefs -af "$DISK" >/dev/null; sgdisk -Z "$DISK" >/dev/null 2>&1 || true
+sfdisk --quiet "$DISK" <<'EOP'
+label: gpt
+size=1M,type=21686148-6449-6E6F-744E-656564454649
+size=1G,type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+type=0FC63DAF-8483-4772-8E79-3D69D8477DE4
+EOP
+sleep 1; partprobe "$DISK" 2>/dev/null || true; sleep 1
+case $DISK in *nvme*|*mmcblk*) P="${DISK}p";; *) P="$DISK";; esac
+mkfs.fat -F32 -n DYVERZ_EFI "${P}2" >/dev/null; [ "$FS" = btrfs ] && mkfs.btrfs -qf -L DYVERZ "${P}3" || mkfs.ext4 -qF -L DYVERZ "${P}3"
+mount "${P}3" /mnt; mkdir -p /mnt/boot; mount "${P}2" /mnt/boot
+echo "== copying system (a few minutes)"
+rsync -aAXHx --info=progress2 --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found","/home/dyverz","/etc/systemd/system/getty@tty1.service.d","/etc/udev/rules.d/81-dhcpcd.rules","/etc/mkinitcpio.conf.d/archiso.conf","/etc/systemd/system/multi-user.target.wants/pacman-init.service","/etc/systemd/system/multi-user.target.wants/choose-mirror.service","/etc/systemd/system/pacman-init.service","/etc/systemd/system/choose-mirror.service","/etc/systemd/system/etc-pacman.d-gnupg.mount","/root/customize_airootfs.sh"} / /mnt
+mkdir -p /mnt/{dev,proc,sys,tmp,run,mnt,media,home}; chmod 1777 /mnt/tmp
+genfstab -U /mnt > /mnt/etc/fstab
+echo "== configuring"
+rm -f /mnt/etc/machine-id; touch /mnt/etc/machine-id; rm -f /mnt/var/lib/dbus/machine-id
+arch-chroot /mnt /bin/bash -e <<EOC
+pacman -Rdd --noconfirm mkinitcpio-archiso >/dev/null 2>&1 || true
+sed -i 's/^HOOKS=.*/HOOKS=(base udev plymouth autodetect microcode modconf kms keyboard keymap consolefont block filesystems fsck)/' /etc/mkinitcpio.conf
+pacman-key --init >/dev/null 2>&1; pacman-key --populate archlinux >/dev/null 2>&1
+mkinitcpio -P >/dev/null 2>&1 || mkinitcpio -P
+sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="Dyverz OS"/; s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=3/; s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3"/' /etc/default/grub
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="Dyverz OS" --removable >/dev/null 2>&1 || true
+grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id="Dyverz OS" >/dev/null 2>&1 || true
+grub-install --target=i386-pc $DISK >/dev/null 2>&1 || true
+grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1
+systemctl enable NetworkManager gdm docker bluetooth winkernel >/dev/null 2>&1 || true
+systemctl enable snapd.socket snapd.apparmor >/dev/null 2>&1 || true
+systemctl disable pacman-init choose-mirror >/dev/null 2>&1 || true
+userdel -r dyverz >/dev/null 2>&1 || true; rm -rf /var/lib/AccountsService/users/dyverz
+/usr/local/bin/dyverz-boot init >/dev/null 2>&1 || true
+/usr/local/bin/dyverz-firstboot-enable
+EOC
+rm -f /mnt/etc/systemd/system/etc-pacman.d-gnupg.mount
+umount -R /mnt; sync
+dialog --title "Dyverz OS" --msgbox "Installed to $DISK.\n\nRemove the USB/ISO and reboot — the Dyverz Setup wizard will create your account and let you pick a look." 10 60; clear
